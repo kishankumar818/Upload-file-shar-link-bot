@@ -1,0 +1,5 @@
+{
+  "name": "Premium File Vault — Telegram Bot & Control Center",
+  "description": "Telegram File Share Bot with Force-Join channel verification, auto-approve join requests, broadcast system, SQLite bot_data.db storage, Conflict-resilient polling, and live admin control center.",
+  "requestFramePermissions": []
+}
