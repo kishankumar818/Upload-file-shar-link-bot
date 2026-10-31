@@ -1,0 +1,16 @@
+# =====================================================================
+#   ✦  PREMIUM FILE VAULT — REQUIREMENTS  ✦
+# =====================================================================
+#  Install karne ke liye:
+#     pip install -U -r requirements.txt
+#
+#  Python version: 3.9+ (3.10+ recommended)
+# =====================================================================
+
+# ---- Telegram Bot Framework ----
+# v21.x – v22.x compatible (as written in bot header comment: >=21,<23)
+python-telegram-bot>=21.0,<23.0
+
+# ---- (Auto dependency of python-telegram-bot — pin safe nahi karte) ----
+# httpx, httpcore  ->  python-telegram-bot khud install kar leta hai
+# =====================================================================
