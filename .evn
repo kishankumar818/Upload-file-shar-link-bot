@@ -1,4 +1,4 @@
-BOT_TOKEN=9284478108:AAGpA4bLpH8I81sdAgEj5oKSJSjIn-yx3ew
-ADMIN_IDS=8917638509
-BOT_NAME=FILE_SHARE_00
-DB_PATH=bot_data.db
+BOT_TOKEN      = 1234567890:ABC...
+ADMIN_IDS      = 123456789
+BOT_NAME       = Premium File Vault
+DB_PATH        = /var/data/bot_data.db
