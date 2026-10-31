@@ -18,8 +18,8 @@
 #        hona chahiye. Purane app me buttons normal dikhenge, kaam same.
 # =====================================================================
 
-BOT_TOKEN = "BOT_TOKEN"   # ya environment variable BOT_TOKEN
-ADMIN_IDS = [123456789]                   # apni numeric Telegram ID(s)
+BOT_TOKEN = "9284478108:AAGpA4bLpH8I81sdAgEj5oKSJSjIn-yx3ew"   # ya environment variable BOT_TOKEN
+ADMIN_IDS = [8917638509]                   # apni numeric Telegram ID(s)
 BOT_NAME = "FILE_SHARE_00_bot"           # bot ka brand naam
 DB_PATH = "bot_data.db"
 
