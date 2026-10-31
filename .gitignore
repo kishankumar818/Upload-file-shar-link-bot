@@ -1,0 +1,6 @@
+bot_data.db
+*.db
+*.sqlite3
+.env
+__pycache__/
+venv/
