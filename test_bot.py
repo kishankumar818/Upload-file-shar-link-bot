@@ -1,9 +1,11 @@
 import asyncio
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
 
+import app as web_app
 import python as bot_core
 
 
@@ -18,6 +20,29 @@ class PremiumFileVaultTests(unittest.TestCase):
             bot_core.conn.close()
             bot_core.conn = None
         self.tmp_dir.cleanup()
+
+    def test_dashboard_password_verification(self):
+        self.assertFalse(web_app.verify_dashboard_password(""))
+        self.assertFalse(web_app.verify_dashboard_password("wrong_password_123"))
+        self.assertTrue(
+            web_app.verify_dashboard_password(
+                "FREE00000000GHGGHGHGHGH444555Kishan1122@8441"
+            )
+        )
+
+    def test_webhook_url_detection_for_render(self):
+        old_render = os.environ.get("RENDER_EXTERNAL_URL")
+        try:
+            os.environ["RENDER_EXTERNAL_URL"] = "https://my-vault-bot.onrender.com/"
+            self.assertEqual(
+                bot_core.resolve_webhook_base_url(),
+                "https://my-vault-bot.onrender.com",
+            )
+        finally:
+            if old_render is None:
+                os.environ.pop("RENDER_EXTERNAL_URL", None)
+            else:
+                os.environ["RENDER_EXTERNAL_URL"] = old_render
 
     def test_config_and_token_validation(self):
         self.assertFalse(bot_core.validate_bot_token(""))

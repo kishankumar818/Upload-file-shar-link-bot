@@ -18,395 +18,445 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="topbar-inner">
-        <div class="brand">
-          <div class="brand-emblem" aria-hidden="true">✦</div>
-          <div>
-            <h1 id="headerBotName">Premium File Vault</h1>
-            <p class="subtitle">
-              Telegram File Share Bot · Force-Join Guard · SQLite <code>bot_data.db</code>
-            </p>
-          </div>
-        </div>
-        <div class="status-cluster">
-          <div class="status-pill" id="conflictGuardBadge">
-            <span class="dot dot-ok"></span>
-            <span>Conflict Guard: Active</span>
-          </div>
-          <div class="status-pill" id="dbStatusBadge">
-            <span class="dot dot-ok"></span>
-            <span id="dbPathLabel">DB: bot_data.db</span>
-          </div>
-          <div class="status-pill" id="botModeBadge">
-            <span class="dot" id="botModeDot"></span>
-            <span id="botModeText">Checking…</span>
-          </div>
-        </div>
-      </div>
-    </header>
+    <!-- 🔒 PASSWORD LOCK GATE -->
+    <section class="auth-gate" id="vaultAuthGate" aria-label="Vault Password Lock">
+      <div class="auth-card">
+        <div class="auth-emblem" aria-hidden="true">🔒</div>
+        <h1>Premium File Vault</h1>
+        <p class="auth-subtitle">
+          Admin Control Center &amp; Bot Database is protected. Enter the master
+          password to unlock access.
+        </p>
 
-    <main class="container">
-      <!-- KPI Summary Bar -->
-      <section class="stats-grid" aria-label="Vault Database Metrics">
-        <article class="stat-card">
-          <span class="stat-label">Force-Join Channels</span>
-          <strong class="stat-value" id="statChannels">0</strong>
-          <span class="stat-meta">Stored in <code>channels</code> table</span>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Vault Files</span>
-          <strong class="stat-value" id="statFiles">0</strong>
-          <span class="stat-meta">Deep-link protected assets</span>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Registered Users</span>
-          <strong class="stat-value" id="statUsers">0</strong>
-          <span class="stat-meta">Broadcast audience</span>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label">Verified Downloads</span>
-          <strong class="stat-value" id="statDownloads">0</strong>
-          <span class="stat-meta">Completed deliveries</span>
-        </article>
-      </section>
-
-      <!-- Main Workspace Grid -->
-      <div class="workspace-grid">
-        <!-- Left Column: Configuration, Channels & Files -->
-        <div class="left-col">
-          <!-- Navigation Tabs -->
-          <nav class="section-tabs" aria-label="Vault Management Sections">
-            <button type="button" class="tab-btn active" data-tab="config" id="tabBtnConfig">
-              ⚙️ Environment &amp; Conflict Fix
-            </button>
-            <button type="button" class="tab-btn" data-tab="channels" id="tabBtnChannels">
-              📢 Force-Join Channels
-            </button>
-            <button type="button" class="tab-btn" data-tab="files" id="tabBtnFiles">
-              📂 Vault Files &amp; Links
-            </button>
-          </nav>
-
-          <!-- TAB 1: Environment Config & Conflict Diagnostics -->
-          <section class="panel" id="tabPanelConfig">
-            <div class="panel-header">
-              <div>
-                <h2>Environment Configuration (<code>.env</code>)</h2>
-                <p>
-                  Configure <code>BOT_TOKEN</code>, <code>ADMIN_IDS</code>,
-                  <code>BOT_NAME</code>, and <code>DB_PATH</code> (<code>bot_data.db</code>).
-                </p>
-              </div>
-              <button type="button" class="btn-secondary" id="copyEnvBtn">
-                📋 Copy .env File
+        <form id="vaultLoginForm" class="auth-form" novalidate>
+          <div class="field-group">
+            <label for="vaultPasswordInput">Vault Master Password</label>
+            <div class="pw-input-wrap">
+              <input
+                type="password"
+                id="vaultPasswordInput"
+                name="password"
+                placeholder="Enter Vault Master Password…"
+                autocomplete="current-password"
+                required
+              />
+              <button
+                type="button"
+                class="pw-toggle-btn"
+                id="togglePwVisibilityBtn"
+                aria-label="Toggle password visibility"
+              >
+                👁️
               </button>
             </div>
+          </div>
 
-            <form id="configForm" class="form-grid" novalidate>
-              <div class="field-group">
-                <label for="inputBotToken">BOT_TOKEN (from @BotFather)</label>
-                <input
-                  type="text"
-                  id="inputBotToken"
-                  name="bot_token"
-                  placeholder="e.g. 7123456789:AAH_your_telegram_bot_token_here"
-                  autocomplete="off"
-                />
-                <small class="field-hint" id="currentTokenHint">Current: Checking…</small>
-              </div>
+          <button type="submit" class="btn-primary auth-submit-btn" id="vaultUnlockBtn">
+            🔓 Unlock Control Center
+          </button>
+          <div class="form-feedback" id="authFeedback" role="alert"></div>
+        </form>
 
-              <div class="field-row">
-                <div class="field-group">
-                  <label for="inputAdminIds">ADMIN_IDS (Comma-separated numeric IDs)</label>
-                  <input
-                    type="text"
-                    id="inputAdminIds"
-                    name="admin_ids"
-                    placeholder="123456789,987654321"
-                    required
-                  />
+        <div class="auth-footer-meta">
+          <span>🛡️ Render Webhook &amp; Conflict Guard Active</span>
+          <span>🗄️ SQLite <code>bot_data.db</code></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 🔓 UNLOCKED APPLICATION SHELL -->
+    <div id="vaultAppShell" class="hidden">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="brand">
+            <div class="brand-emblem" aria-hidden="true">✦</div>
+            <div>
+              <h1 id="headerBotName">Premium File Vault</h1>
+              <p class="subtitle">
+                Telegram File Share Bot · Force-Join Guard · SQLite <code>bot_data.db</code>
+              </p>
+            </div>
+          </div>
+          <div class="status-cluster">
+            <div class="status-pill" id="conflictGuardBadge">
+              <span class="dot dot-ok"></span>
+              <span>Conflict Guard: Active</span>
+            </div>
+            <div class="status-pill" id="dbStatusBadge">
+              <span class="dot dot-ok"></span>
+              <span id="dbPathLabel">DB: bot_data.db</span>
+            </div>
+            <div class="status-pill" id="botModeBadge">
+              <span class="dot" id="botModeDot"></span>
+              <span id="botModeText">Checking…</span>
+            </div>
+            <button type="button" class="btn-danger-sm" id="lockVaultBtn">
+              🔒 Lock Vault
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="container">
+        <!-- KPI Summary Bar -->
+        <section class="stats-grid" aria-label="Vault Database Metrics">
+          <article class="stat-card">
+            <span class="stat-label">Force-Join Channels</span>
+            <strong class="stat-value" id="statChannels">0</strong>
+            <span class="stat-meta">Stored in <code>channels</code> table</span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Vault Files</span>
+            <strong class="stat-value" id="statFiles">0</strong>
+            <span class="stat-meta">Deep-link protected assets</span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Registered Users</span>
+            <strong class="stat-value" id="statUsers">0</strong>
+            <span class="stat-meta">Broadcast audience</span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Verified Downloads</span>
+            <strong class="stat-value" id="statDownloads">0</strong>
+            <span class="stat-meta">Completed deliveries</span>
+          </article>
+        </section>
+
+        <!-- Main Workspace Grid -->
+        <div class="workspace-grid">
+          <!-- Left Column: Configuration, Channels & Files -->
+          <div class="left-col">
+            <!-- Navigation Tabs -->
+            <nav class="section-tabs" aria-label="Vault Management Sections">
+              <button type="button" class="tab-btn active" data-tab="config" id="tabBtnConfig">
+                ⚙️ Environment &amp; Conflict Fix
+              </button>
+              <button type="button" class="tab-btn" data-tab="channels" id="tabBtnChannels">
+                📢 Force-Join Channels
+              </button>
+              <button type="button" class="tab-btn" data-tab="files" id="tabBtnFiles">
+                📂 Vault Files &amp; Links
+              </button>
+            </nav>
+
+            <!-- TAB 1: Environment Config & Conflict Diagnostics -->
+            <section class="panel" id="tabPanelConfig">
+              <div class="panel-header">
+                <div>
+                  <h2>Environment Configuration (<code>.env</code>)</h2>
+                  <p>
+                    Configure <code>BOT_TOKEN</code>, <code>ADMIN_IDS</code>,
+                    <code>BOT_NAME</code>, and <code>DB_PATH</code> (<code>bot_data.db</code>).
+                  </p>
                 </div>
-                <div class="field-group">
-                  <label for="inputBotName">BOT_NAME</label>
-                  <input
-                    type="text"
-                    id="inputBotName"
-                    name="bot_name"
-                    placeholder="Premium File Vault"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div class="field-group">
-                <label for="inputDbPath">DB_PATH (SQLite Database File)</label>
-                <input
-                  type="text"
-                  id="inputDbPath"
-                  name="db_path"
-                  value="bot_data.db"
-                  required
-                />
-                <small class="field-hint">
-                  Auto-heals corrupt DBs, uses WAL mode, and safely falls back to
-                  <code>bot_data.db</code> if <code>/var/data</code> is unmounted.
-                </small>
-              </div>
-
-              <div class="form-actions">
-                <button type="submit" class="btn-primary" id="saveConfigBtn">
-                  💾 Save Configuration &amp; Sync .env
+                <button type="button" class="btn-secondary" id="copyEnvBtn">
+                  📋 Copy .env File
                 </button>
-                <span class="form-feedback" id="configFeedback" role="status"></span>
               </div>
-            </form>
 
-            <div class="diagnostics-box">
-              <h3>🛡️ Render <code>telegram.error.Conflict</code> Resolution Checklist</h3>
-              <ul class="diag-list">
-                <li>
-                  <span class="check-icon">✓</span>
-                  <div>
-                    <strong>Webhook Auto-Cleanup (<code>_post_init</code>)</strong>
-                    <p>
-                      Calls <code>await app.bot.delete_webhook(drop_pending_updates=True)</code>
-                      before starting <code>getUpdates</code> polling.
-                    </p>
-                  </div>
-                </li>
-                <li>
-                  <span class="check-icon">✓</span>
-                  <div>
-                    <strong>Single-Instance Process Lock (<code>bot_data.db.lock</code>)</strong>
-                    <p>
-                      Uses OS-level non-blocking <code>fcntl.flock</code> so duplicate local
-                      workers never poll Telegram simultaneously.
-                    </p>
-                  </div>
-                </li>
-                <li>
-                  <span class="check-icon">✓</span>
-                  <div>
-                    <strong>Graceful Rolling-Deploy Conflict Backoff</strong>
-                    <p>
-                      Catches <code>telegram.error.Conflict</code> in <code>error_handler</code>
-                      and the polling loop, backing off cleanly instead of crashing or spamming
-                      tracebacks while Render terminates the old container.
-                    </p>
-                  </div>
-                </li>
-                <li>
-                  <span class="check-icon">✓</span>
-                  <div>
-                    <strong>Safe <code>DB_PATH = bot_data.db</code> + Conversation Fixes</strong>
-                    <p>
-                      Fixes <code>.evn</code> / <code>.env</code> loading, empty invite link HTML
-                      errors, accidental <code>❌ Cancel</code> broadcasts, and conversation
-                      re-entry locks.
-                    </p>
-                  </div>
-                </li>
-              </ul>
-            </div>
-          </section>
-
-          <!-- TAB 2: Force-Join Channels -->
-          <section class="panel hidden" id="tabPanelChannels">
-            <div class="panel-header">
-              <div>
-                <h2>Force-Join Channels (<code>channels</code> Table)</h2>
-                <p>
-                  Users must join all listed channels before downloading any shared file link.
-                </p>
-              </div>
-            </div>
-
-            <form id="addChannelForm" class="form-grid" novalidate>
-              <div class="field-row">
+              <form id="configForm" class="form-grid" novalidate>
                 <div class="field-group">
-                  <label for="channelTitle">Channel Title</label>
+                  <label for="inputBotToken">BOT_TOKEN (from @BotFather)</label>
                   <input
                     type="text"
-                    id="channelTitle"
-                    placeholder="e.g. Premium Vault Backup"
+                    id="inputBotToken"
+                    name="bot_token"
+                    placeholder="e.g. 7123456789:AAH_your_telegram_bot_token_here"
+                    autocomplete="off"
+                  />
+                  <small class="field-hint" id="currentTokenHint">Current: Checking…</small>
+                </div>
+
+                <div class="field-row">
+                  <div class="field-group">
+                    <label for="inputAdminIds">ADMIN_IDS (Comma-separated numeric IDs)</label>
+                    <input
+                      type="text"
+                      id="inputAdminIds"
+                      name="admin_ids"
+                      placeholder="123456789,987654321"
+                      required
+                    />
+                  </div>
+                  <div class="field-group">
+                    <label for="inputBotName">BOT_NAME</label>
+                    <input
+                      type="text"
+                      id="inputBotName"
+                      name="bot_name"
+                      placeholder="Premium File Vault"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div class="field-group">
+                  <label for="inputDbPath">DB_PATH (SQLite Database File)</label>
+                  <input
+                    type="text"
+                    id="inputDbPath"
+                    name="db_path"
+                    value="bot_data.db"
                     required
                   />
+                  <small class="field-hint">
+                    Auto-heals corrupt DBs, uses WAL mode, and safely falls back to
+                    <code>bot_data.db</code> if <code>/var/data</code> is unmounted.
+                  </small>
                 </div>
-                <div class="field-group">
-                  <label for="channelChatId">Telegram Chat ID</label>
-                  <input
-                    type="number"
-                    id="channelChatId"
-                    placeholder="-1001234567890"
-                    required
-                  />
-                </div>
-              </div>
-              <div class="field-row">
-                <div class="field-group">
-                  <label for="channelUsername">Username (Optional)</label>
-                  <input
-                    type="text"
-                    id="channelUsername"
-                    placeholder="PremiumVaultBackup"
-                  />
-                </div>
-                <div class="field-group">
-                  <label for="channelInviteLink">Invite Link (https://t.me/...)</label>
-                  <input
-                    type="url"
-                    id="channelInviteLink"
-                    placeholder="https://t.me/+AbCdEfGhIjKlMnOp"
-                    required
-                  />
-                </div>
-              </div>
-              <div class="form-actions">
-                <button type="submit" class="btn-primary">➕ Add Force-Join Channel</button>
-                <span class="form-feedback" id="channelFeedback" role="status"></span>
-              </div>
-            </form>
 
-            <div class="table-wrap">
-              <table class="data-table" aria-label="Force-Join Channels List">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Channel</th>
-                    <th>Chat ID</th>
-                    <th>Invite Link</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody id="channelsTableBody"></tbody>
-              </table>
-            </div>
-          </section>
-
-          <!-- TAB 3: Vault Files -->
-          <section class="panel hidden" id="tabPanelFiles">
-            <div class="panel-header">
-              <div>
-                <h2>Vault Files &amp; Deep Links (<code>files</code> Table)</h2>
-                <p>
-                  Register or manage files in <code>bot_data.db</code> and copy their
-                  <code>?start=file_&lt;id&gt;</code> share links.
-                </p>
-              </div>
-            </div>
-
-            <form id="addFileForm" class="form-grid" novalidate>
-              <div class="field-row">
-                <div class="field-group">
-                  <label for="fileName">File Name</label>
-                  <input
-                    type="text"
-                    id="fileName"
-                    placeholder="e.g. Course_Masterclass_2026.zip"
-                    required
-                  />
+                <div class="form-actions">
+                  <button type="submit" class="btn-primary" id="saveConfigBtn">
+                    💾 Save Configuration &amp; Sync .env
+                  </button>
+                  <span class="form-feedback" id="configFeedback" role="status"></span>
                 </div>
-                <div class="field-group">
-                  <label for="fileType">Media Type</label>
-                  <select id="fileType">
-                    <option value="document">📄 Document</option>
-                    <option value="video">🎬 Video</option>
-                    <option value="photo">🖼️ Photo</option>
-                    <option value="audio">🎵 Audio</option>
-                    <option value="voice">🎙️ Voice</option>
-                    <option value="animation">🎞️ Animation</option>
-                  </select>
+              </form>
+
+              <div class="diagnostics-box">
+                <h3>🛡️ Render <code>telegram.error.Conflict</code> Resolution Checklist</h3>
+                <ul class="diag-list">
+                  <li>
+                    <span class="check-icon">✓</span>
+                    <div>
+                      <strong>Render Automatic Webhook Mode (<code>/telegram-webhook</code>)</strong>
+                      <p>
+                        Detects <code>RENDER_EXTERNAL_URL</code> on Render Web Services and switches
+                        to Webhook delivery so <code>getUpdates</code> Conflict is 100% impossible.
+                      </p>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="check-icon">✓</span>
+                    <div>
+                      <strong>Single-Instance Process Lock &amp; Deduplicated Import</strong>
+                      <p>
+                        Prevents duplicate module initialization and locks
+                        <code>bot_data.db.lock</code> so two local workers never collide.
+                      </p>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="check-icon">✓</span>
+                    <div>
+                      <strong>Updater Cooldown Pause (Local Polling Fallback)</strong>
+                      <p>
+                        When running in Polling mode without HTTPS webhooks, pauses the
+                        <code>Updater</code> for 15s on conflict instead of fighting in a retry loop.
+                      </p>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="check-icon">✓</span>
+                    <div>
+                      <strong>Password-Protected Vault + <code>DB_PATH = bot_data.db</code></strong>
+                      <p>
+                        Locks all Control Center APIs behind your master password while keeping
+                        <code>/api/health</code> and <code>/telegram-webhook</code> online 24/7.
+                      </p>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </section>
+
+            <!-- TAB 2: Force-Join Channels -->
+            <section class="panel hidden" id="tabPanelChannels">
+              <div class="panel-header">
+                <div>
+                  <h2>Force-Join Channels (<code>channels</code> Table)</h2>
+                  <p>
+                    Users must join all listed channels before downloading any shared file link.
+                  </p>
                 </div>
               </div>
-              <div class="field-row">
-                <div class="field-group">
-                  <label for="fileCaption">Custom Caption (Optional)</label>
-                  <input
-                    type="text"
-                    id="fileCaption"
-                    placeholder="High-speed direct download via Premium File Vault"
-                  />
+
+              <form id="addChannelForm" class="form-grid" novalidate>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label for="channelTitle">Channel Title</label>
+                    <input
+                      type="text"
+                      id="channelTitle"
+                      placeholder="e.g. Premium Vault Backup"
+                      required
+                    />
+                  </div>
+                  <div class="field-group">
+                    <label for="channelChatId">Telegram Chat ID</label>
+                    <input
+                      type="number"
+                      id="channelChatId"
+                      placeholder="-1001234567890"
+                      required
+                    />
+                  </div>
                 </div>
-                <div class="field-group">
-                  <label for="fileTgId">Telegram File ID (Optional in simulator)</label>
-                  <input
-                    type="text"
-                    id="fileTgId"
-                    placeholder="BQACAgUAAxkBAAI..."
-                  />
+                <div class="field-row">
+                  <div class="field-group">
+                    <label for="channelUsername">Username (Optional)</label>
+                    <input
+                      type="text"
+                      id="channelUsername"
+                      placeholder="PremiumVaultBackup"
+                    />
+                  </div>
+                  <div class="field-group">
+                    <label for="channelInviteLink">Invite Link (https://t.me/...)</label>
+                    <input
+                      type="url"
+                      id="channelInviteLink"
+                      placeholder="https://t.me/+AbCdEfGhIjKlMnOp"
+                      required
+                    />
+                  </div>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn-primary">➕ Add Force-Join Channel</button>
+                  <span class="form-feedback" id="channelFeedback" role="status"></span>
+                </div>
+              </form>
+
+              <div class="table-wrap">
+                <table class="data-table" aria-label="Force-Join Channels List">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Channel</th>
+                      <th>Chat ID</th>
+                      <th>Invite Link</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="channelsTableBody"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <!-- TAB 3: Vault Files -->
+            <section class="panel hidden" id="tabPanelFiles">
+              <div class="panel-header">
+                <div>
+                  <h2>Vault Files &amp; Deep Links (<code>files</code> Table)</h2>
+                  <p>
+                    Register or manage files in <code>bot_data.db</code> and copy their
+                    <code>?start=file_&lt;id&gt;</code> share links.
+                  </p>
                 </div>
               </div>
-              <div class="form-actions">
-                <button type="submit" class="btn-primary">📤 Register File &amp; Generate Link</button>
-                <span class="form-feedback" id="fileFeedback" role="status"></span>
+
+              <form id="addFileForm" class="form-grid" novalidate>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label for="fileName">File Name</label>
+                    <input
+                      type="text"
+                      id="fileName"
+                      placeholder="e.g. Course_Masterclass_2026.zip"
+                      required
+                    />
+                  </div>
+                  <div class="field-group">
+                    <label for="fileType">Media Type</label>
+                    <select id="fileType">
+                      <option value="document">📄 Document</option>
+                      <option value="video">🎬 Video</option>
+                      <option value="photo">🖼️ Photo</option>
+                      <option value="audio">🎵 Audio</option>
+                      <option value="voice">🎙️ Voice</option>
+                      <option value="animation">🎞️ Animation</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label for="fileCaption">Custom Caption (Optional)</label>
+                    <input
+                      type="text"
+                      id="fileCaption"
+                      placeholder="High-speed direct download via Premium File Vault"
+                    />
+                  </div>
+                  <div class="field-group">
+                    <label for="fileTgId">Telegram File ID (Optional in simulator)</label>
+                    <input
+                      type="text"
+                      id="fileTgId"
+                      placeholder="BQACAgUAAxkBAAI..."
+                    />
+                  </div>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn-primary">📤 Register File &amp; Generate Link</button>
+                  <span class="form-feedback" id="fileFeedback" role="status"></span>
+                </div>
+              </form>
+
+              <div class="table-wrap">
+                <table class="data-table" aria-label="Uploaded Vault Files">
+                  <thead>
+                    <tr>
+                      <th>#ID</th>
+                      <th>File</th>
+                      <th>Deep Link</th>
+                      <th>Downloads</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="filesTableBody"></tbody>
+                </table>
               </div>
-            </form>
-
-            <div class="table-wrap">
-              <table class="data-table" aria-label="Uploaded Vault Files">
-                <thead>
-                  <tr>
-                    <th>#ID</th>
-                    <th>File</th>
-                    <th>Deep Link</th>
-                    <th>Downloads</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="filesTableBody"></tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-
-        <!-- Right Column: Interactive Telegram Bot Simulator -->
-        <aside class="right-col" aria-label="Interactive Telegram Bot Preview">
-          <div class="tg-card">
-            <div class="tg-header">
-              <div class="tg-avatar" aria-hidden="true">🎁</div>
-              <div class="tg-header-info">
-                <strong id="simBotTitle">Premium File Vault</strong>
-                <span>bot · live SQLite simulator</span>
-              </div>
-              <div class="tg-role-toggle">
-                <label for="simFileSelect" class="sr-only">Select File to Test</label>
-                <select id="simFileSelect" aria-label="Select File to Test"></select>
-              </div>
-            </div>
-
-            <!-- Simulated Channel Membership Toggles -->
-            <div class="tg-membership-bar">
-              <span class="membership-title">Simulate User Channel Membership:</span>
-              <div class="membership-chips" id="simMembershipChips"></div>
-            </div>
-
-            <!-- Telegram Message Viewport -->
-            <div class="tg-chat-area" id="tgChatViewport">
-              <div class="tg-bubble" id="tgBubbleContent"></div>
-              <div class="tg-delivered-box hidden" id="tgDeliveredBox"></div>
-              <div class="tg-inline-kb" id="tgInlineKeyboard"></div>
-            </div>
-
-            <!-- Quick Command Toolbar -->
-            <div class="tg-command-bar">
-              <button type="button" class="cmd-btn" id="simBtnStart">
-                /start (Admin)
-              </button>
-              <button type="button" class="cmd-btn cmd-accent" id="simBtnDeepLink">
-                🔗 Open File Deep Link
-              </button>
-              <button type="button" class="cmd-btn" id="simBtnVerify">
-                ✅ Verify &amp; Get File
-              </button>
-              <button type="button" class="cmd-btn" id="simBtnStats">
-                📊 /stats
-              </button>
-            </div>
+            </section>
           </div>
-        </aside>
-      </div>
-    </main>
+
+          <!-- Right Column: Interactive Telegram Bot Simulator -->
+          <aside class="right-col" aria-label="Interactive Telegram Bot Preview">
+            <div class="tg-card">
+              <div class="tg-header">
+                <div class="tg-avatar" aria-hidden="true">🎁</div>
+                <div class="tg-header-info">
+                  <strong id="simBotTitle">Premium File Vault</strong>
+                  <span>bot · live SQLite simulator</span>
+                </div>
+                <div class="tg-role-toggle">
+                  <label for="simFileSelect" class="sr-only">Select File to Test</label>
+                  <select id="simFileSelect" aria-label="Select File to Test"></select>
+                </div>
+              </div>
+
+              <!-- Simulated Channel Membership Toggles -->
+              <div class="tg-membership-bar">
+                <span class="membership-title">Simulate User Channel Membership:</span>
+                <div class="membership-chips" id="simMembershipChips"></div>
+              </div>
+
+              <!-- Telegram Message Viewport -->
+              <div class="tg-chat-area" id="tgChatViewport">
+                <div class="tg-bubble" id="tgBubbleContent"></div>
+                <div class="tg-delivered-box hidden" id="tgDeliveredBox"></div>
+                <div class="tg-inline-kb" id="tgInlineKeyboard"></div>
+              </div>
+
+              <!-- Quick Command Toolbar -->
+              <div class="tg-command-bar">
+                <button type="button" class="cmd-btn" id="simBtnStart">
+                  /start (Admin)
+                </button>
+                <button type="button" class="cmd-btn cmd-accent" id="simBtnDeepLink">
+                  🔗 Open File Deep Link
+                </button>
+                <button type="button" class="cmd-btn" id="simBtnVerify">
+                  ✅ Verify &amp; Get File
+                </button>
+                <button type="button" class="cmd-btn" id="simBtnStats">
+                  📊 /stats
+                </button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
 
     <script src="/static/app.js"></script>
   </body>

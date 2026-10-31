@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import asyncio
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
@@ -12,6 +14,20 @@ from urllib.parse import urlparse
 import python as bot_core
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+DASHBOARD_PASSWORD: str = (
+    os.getenv(
+        "DASHBOARD_PASSWORD",
+        "FREE00000000GHGGHGHGHGH444555Kishan1122@8441",
+    ).strip()
+    or "FREE00000000GHGGHGHGHGH444555Kishan1122@8441"
+)
+
+
+def verify_dashboard_password(candidate: str | None) -> bool:
+    if not candidate:
+        return False
+    return hmac.compare_digest(candidate.strip(), DASHBOARD_PASSWORD)
 
 
 def build_full_state() -> dict[str, Any]:
@@ -215,10 +231,15 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8"))
 
+    def _is_authorized(self) -> bool:
+        header_pw = self.headers.get("X-Vault-Password", "")
+        return verify_dashboard_password(header_pw)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
 
+        # Public health check for Render & uptime monitors
         if path == "/api/health":
             self._send_json(
                 {
@@ -232,6 +253,9 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/state":
+            if not self._is_authorized():
+                self._send_json({"detail": "Unauthorized — Vault Password required"}, status=401)
+                return
             self._send_json(build_full_state())
             return
 
@@ -268,6 +292,37 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
             body = self._read_json()
         except Exception:
             self._send_json({"detail": "Invalid JSON payload"}, status=400)
+            return
+
+        # 1. Telegram Webhook Receiver (for Render Web Services — Zero Conflict!)
+        if path == "/telegram-webhook":
+            ptb_app, bot_loop = bot_core.get_active_bot_app()
+            if ptb_app is not None and bot_loop is not None:
+                try:
+                    update_obj = bot_core.Update.de_json(body, ptb_app.bot)
+                    asyncio.run_coroutine_threadsafe(
+                        ptb_app.process_update(update_obj), bot_loop
+                    )
+                except Exception as e:
+                    bot_core.logger.warning("Webhook update error: %s", e)
+            self._send_json({"ok": True})
+            return
+
+        # 2. Password Login Endpoint
+        if path == "/api/login":
+            pw = str(body.get("password") or "")
+            if verify_dashboard_password(pw):
+                self._send_json({"authenticated": True, "state": build_full_state()})
+            else:
+                self._send_json(
+                    {"authenticated": False, "detail": "❌ Galat password! Sahi Vault Password daalein."},
+                    status=401,
+                )
+            return
+
+        # All other /api/* endpoints require password authentication
+        if not self._is_authorized():
+            self._send_json({"detail": "Unauthorized — Vault Password required"}, status=401)
             return
 
         if path == "/api/config":
@@ -352,6 +407,10 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"detail": "Not found"}, status=404)
 
     def do_DELETE(self) -> None:
+        if not self._is_authorized():
+            self._send_json({"detail": "Unauthorized — Vault Password required"}, status=401)
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -378,17 +437,19 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"detail": "Not found"}, status=404)
 
 
-def run_control_center_server(port: int = 3000) -> None:
+def run_control_center_server(port: int = 3000, acquire_lock: bool = False) -> None:
     bot_core.init_db()
     bot_core.seed_demo_data_if_empty()
-    bot_core.acquire_single_instance_lock()
+    if acquire_lock:
+        bot_core.acquire_single_instance_lock()
     server = ThreadingHTTPServer(("0.0.0.0", port), VaultRequestHandler)
     bot_core.logger.info(
-        "🌐 Premium File Vault Control Center listening on http://0.0.0.0:%d", port
+        "🌐 Premium File Vault Control Center (Password Protected) listening on http://0.0.0.0:%d",
+        port,
     )
     server.serve_forever()
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 3000))
-    run_control_center_server(port=port)
+    run_control_center_server(port=port, acquire_lock=True)

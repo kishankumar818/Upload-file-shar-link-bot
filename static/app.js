@@ -1,4 +1,7 @@
 (function () {
+  const STORAGE_KEY = "pfv_vault_password";
+  let vaultPassword = sessionStorage.getItem(STORAGE_KEY) || "";
+
   let appState = {
     config: {},
     stats: { channels: 0, files: 0, users: 0, downloads: 0 },
@@ -11,6 +14,16 @@
   let selectedSimFileId = null;
 
   const els = {
+    // Auth Gate
+    vaultAuthGate: document.getElementById("vaultAuthGate"),
+    vaultAppShell: document.getElementById("vaultAppShell"),
+    vaultLoginForm: document.getElementById("vaultLoginForm"),
+    vaultPasswordInput: document.getElementById("vaultPasswordInput"),
+    togglePwVisibilityBtn: document.getElementById("togglePwVisibilityBtn"),
+    authFeedback: document.getElementById("authFeedback"),
+    lockVaultBtn: document.getElementById("lockVaultBtn"),
+
+    // Header
     headerBotName: document.getElementById("headerBotName"),
     simBotTitle: document.getElementById("simBotTitle"),
     dbPathLabel: document.getElementById("dbPathLabel"),
@@ -67,6 +80,74 @@
     simBtnStats: document.getElementById("simBtnStats"),
   };
 
+  function apiFetch(url, options) {
+    const opts = Object.assign({}, options || {});
+    opts.headers = Object.assign({}, opts.headers || {}, {
+      "X-Vault-Password": vaultPassword,
+    });
+    return fetch(url, opts);
+  }
+
+  function showLockGate(message) {
+    els.vaultAuthGate.classList.remove("hidden");
+    els.vaultAppShell.classList.add("hidden");
+    if (message) {
+      setFeedback(els.authFeedback, message, true);
+    }
+  }
+
+  function showUnlockedApp(stateData) {
+    els.vaultAuthGate.classList.add("hidden");
+    els.vaultAppShell.classList.remove("hidden");
+    setFeedback(els.authFeedback, "", false);
+    if (stateData) {
+      renderAll(stateData);
+      runSimulation("deep_link");
+    }
+  }
+
+  els.togglePwVisibilityBtn.addEventListener("click", () => {
+    const isPw = els.vaultPasswordInput.type === "password";
+    els.vaultPasswordInput.type = isPw ? "text" : "password";
+  });
+
+  els.vaultLoginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const entered = els.vaultPasswordInput.value.trim();
+    if (!entered) {
+      setFeedback(els.authFeedback, "❌ Password daalna zaroori hai.", true);
+      return;
+    }
+
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: entered }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setFeedback(
+        els.authFeedback,
+        err.detail || "❌ Galat password! Sahi Vault Password daalein.",
+        true
+      );
+      return;
+    }
+
+    const data = await res.json();
+    vaultPassword = entered;
+    sessionStorage.setItem(STORAGE_KEY, vaultPassword);
+    els.vaultPasswordInput.value = "";
+    showUnlockedApp(data.state);
+  });
+
+  els.lockVaultBtn.addEventListener("click", () => {
+    vaultPassword = "";
+    sessionStorage.removeItem(STORAGE_KEY);
+    showLockGate("🔒 Vault locked.");
+  });
+
   function switchTab(tabName) {
     els.tabBtns.forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.tab === tabName);
@@ -103,7 +184,10 @@
     els.simBotTitle.textContent = cfg.bot_name || "Premium File Vault";
     els.dbPathLabel.textContent = "DB: " + (cfg.db_path || "bot_data.db");
 
-    if (cfg.runtime && cfg.runtime.bot_running) {
+    if (cfg.runtime && cfg.runtime.mode === "webhook_live") {
+      els.botModeDot.className = "dot dot-ok";
+      els.botModeText.textContent = "Webhook Mode: Live (Zero Conflict)";
+    } else if (cfg.runtime && cfg.runtime.bot_running) {
       els.botModeDot.className = "dot dot-ok";
       els.botModeText.textContent = "Telegram Polling: Live";
     } else if (cfg.token_valid) {
@@ -167,7 +251,7 @@
     els.channelsTableBody.querySelectorAll("[data-del-channel]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-del-channel");
-        const res = await fetch(`/api/channels/${id}`, { method: "DELETE" });
+        const res = await apiFetch(`/api/channels/${id}`, { method: "DELETE" });
         if (res.ok) {
           joinedChannelIds.delete(Number(id));
           renderAll(await res.json());
@@ -225,7 +309,7 @@
     els.filesTableBody.querySelectorAll("[data-del-file]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-del-file");
-        const res = await fetch(`/api/files/${id}`, { method: "DELETE" });
+        const res = await apiFetch(`/api/files/${id}`, { method: "DELETE" });
         if (res.ok) {
           renderAll(await res.json());
         }
@@ -281,7 +365,7 @@
   async function runSimulation(action, fileIdOverride) {
     const targetFileId =
       fileIdOverride || Number(els.simFileSelect.value) || selectedSimFileId || 1;
-    const res = await fetch("/api/simulate", {
+    const res = await apiFetch("/api/simulate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -381,7 +465,7 @@
       body.bot_token = botToken;
     }
 
-    const res = await fetch("/api/config", {
+    const res = await apiFetch("/api/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -438,7 +522,7 @@
       return;
     }
 
-    const res = await fetch("/api/channels", {
+    const res = await apiFetch("/api/channels", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -478,7 +562,7 @@
       return;
     }
 
-    const res = await fetch("/api/files", {
+    const res = await apiFetch("/api/files", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -525,11 +609,20 @@
   );
   els.simBtnStats.addEventListener("click", () => runSimulation("stats"));
 
-  fetch("/api/state")
-    .then((r) => r.json())
-    .then((data) => {
-      renderAll(data);
-      runSimulation("deep_link");
-    })
-    .catch((err) => console.error("Failed to load initial state:", err));
+  // Check if already unlocked in sessionStorage
+  if (vaultPassword) {
+    apiFetch("/api/state")
+      .then((r) => {
+        if (!r.ok) throw new Error("Unauthorized");
+        return r.json();
+      })
+      .then((data) => showUnlockedApp(data))
+      .catch(() => {
+        vaultPassword = "";
+        sessionStorage.removeItem(STORAGE_KEY);
+        showLockGate();
+      });
+  } else {
+    showLockGate();
+  }
 })();

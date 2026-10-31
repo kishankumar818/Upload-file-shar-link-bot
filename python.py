@@ -15,13 +15,18 @@ import html
 import logging
 import os
 import re
+import signal
 import sqlite3
+import sys
 import threading
-import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Register this module as "python" even when executed as "__main__"
+# so `import python as bot_core` inside app.py never imports this file twice.
+sys.modules.setdefault("python", sys.modules[__name__])
 
 _ROOT_DIR = Path(__file__).resolve().parent
 
@@ -177,6 +182,10 @@ except ImportError:
     class Update:
         ALL_TYPES = None
 
+        @staticmethod
+        def de_json(data: dict[str, Any], bot: Any) -> Any:
+            return data
+
     class ConversationHandler:
         END = -1
 
@@ -197,6 +206,9 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext.Updater").setLevel(logging.CRITICAL)
+logging.getLogger("telegram.ext._updater").setLevel(logging.CRITICAL)
+logging.getLogger("telegram.ext._utils.networkloop").setLevel(logging.CRITICAL)
 logger = logging.getLogger("premium-vault")
 
 
@@ -270,6 +282,23 @@ def resolve_db_path(raw_path: str | None) -> str:
     return fallback
 
 
+def resolve_webhook_base_url() -> str:
+    """
+    Detects if running on a Render Web Service (RENDER_EXTERNAL_URL / RENDER_EXTERNAL_HOSTNAME)
+    or custom WEBHOOK_URL. When present, Webhook mode is used so getUpdates Conflict is impossible.
+    """
+    if os.getenv("USE_POLLING", "").strip().lower() in ("1", "true", "yes"):
+        return ""
+    for env_key in ("WEBHOOK_URL", "RENDER_EXTERNAL_URL"):
+        val = os.getenv(env_key, "").strip().rstrip("/")
+        if val.startswith("https://"):
+            return val
+    host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip().rstrip("/")
+    if host and "." in host:
+        return f"https://{host}"
+    return ""
+
+
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS: list[int] = parse_admin_ids(os.getenv("ADMIN_IDS", "123456789")) or [123456789]
 BOT_NAME: str = os.getenv("BOT_NAME", "Premium File Vault").strip() or "Premium File Vault"
@@ -282,6 +311,7 @@ BOT_RUNTIME_STATUS: dict[str, Any] = {
     "bot_username": "",
     "token_valid": validate_bot_token(BOT_TOKEN),
     "ptb_installed": PTB_AVAILABLE,
+    "webhook_url": "",
     "conflict_count": 0,
     "last_conflict_at": None,
     "last_error": None,
@@ -289,6 +319,15 @@ BOT_RUNTIME_STATUS: dict[str, Any] = {
     "single_instance_locked": False,
     "started_at": datetime.now(timezone.utc).isoformat(),
 }
+
+# Active PTB Application & event loop for webhook delivery
+_ACTIVE_PTB_APP: Any = None
+_ACTIVE_BOT_LOOP: asyncio.AbstractEventLoop | None = None
+_POLLING_COOLDOWN_LOCK = False
+
+
+def get_active_bot_app() -> tuple[Any, asyncio.AbstractEventLoop | None]:
+    return _ACTIVE_PTB_APP, _ACTIVE_BOT_LOOP
 
 
 def save_env_config(
@@ -1935,41 +1974,79 @@ async def forwarded_channel_handler(
 
 
 # =====================================================================
-#  13) 🚨 ERROR HANDLER (Fixes telegram.error.Conflict crash/spam)
+#  13) 🚨 ERROR HANDLER & DIRECT UPDATE-QUEUE POLLING ENGINE
 # =====================================================================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     err = getattr(context, "error", None)
     if isinstance(err, Conflict):
-        BOT_RUNTIME_STATUS["conflict_count"] = (
-            int(BOT_RUNTIME_STATUS.get("conflict_count", 0)) + 1
-        )
+        count = int(BOT_RUNTIME_STATUS.get("conflict_count", 0)) + 1
+        BOT_RUNTIME_STATUS["conflict_count"] = count
         BOT_RUNTIME_STATUS["last_conflict_at"] = now_iso()
         BOT_RUNTIME_STATUS["last_error"] = (
-            "Conflict: Another bot instance or rolling deploy was polling getUpdates. "
-            "Auto-backing off until the duplicate instance terminates."
+            "Conflict: Another bot instance was polling getUpdates. "
+            "Auto-cooldown active."
         )
-        logger.warning(
-            "⚠️ Telegram getUpdates Conflict (#%d) — another bot instance or Render rolling deploy "
-            "is active. Backing off for 5s so the old instance can exit cleanly...",
-            BOT_RUNTIME_STATUS["conflict_count"],
-        )
-        await asyncio.sleep(5.0)
         return
 
     if isinstance(err, RetryAfter):
         await asyncio.sleep(float(err.retry_after) + 1.0)
         return
 
-    if isinstance(err, (BadRequest, Forbidden)):
-        return
-
-    if isinstance(err, (NetworkError, TimedOut)):
-        logger.warning("⚠️ Transient Telegram network timeout/error: %s", err)
-        await asyncio.sleep(2.0)
+    if isinstance(err, (BadRequest, Forbidden, NetworkError, TimedOut)):
         return
 
     BOT_RUNTIME_STATUS["last_error"] = str(err)
     logger.error("Update error:", exc_info=err)
+
+
+async def _custom_polling_loop(app: Application, stop_event: asyncio.Event) -> None:
+    """
+    Direct update_queue polling engine that bypasses telegram.ext._updater and
+    networkloop.py completely. Eliminates all getUpdates Conflict tracebacks and
+    ping-pong retry loops during Render rolling deployments.
+    """
+    offset: int | None = None
+    try:
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        BOT_RUNTIME_STATUS["webhook_cleared"] = True
+    except Exception:
+        pass
+
+    logger.info("✅ Bot active and listening for Telegram updates.")
+    while not stop_event.is_set():
+        try:
+            updates = await app.bot.get_updates(
+                offset=offset,
+                timeout=20,
+                allowed_updates=Update.ALL_TYPES,
+            )
+            for upd in updates:
+                offset = upd.update_id + 1
+                await app.update_queue.put(upd)
+        except Conflict:
+            count = int(BOT_RUNTIME_STATUS.get("conflict_count", 0)) + 1
+            BOT_RUNTIME_STATUS["conflict_count"] = count
+            BOT_RUNTIME_STATUS["last_conflict_at"] = now_iso()
+            # Quietly wait 15s so any retiring Render container finishes exiting
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=15.0)
+            except asyncio.TimeoutError:
+                pass
+            if not stop_event.is_set():
+                try:
+                    await app.bot.delete_webhook(drop_pending_updates=False)
+                except Exception:
+                    pass
+        except RetryAfter as e:
+            await asyncio.sleep(float(getattr(e, "retry_after", 5.0)) + 1.0)
+        except (TimedOut, NetworkError):
+            await asyncio.sleep(2.0)
+        except TelegramError:
+            await asyncio.sleep(5.0)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            await asyncio.sleep(5.0)
 
 
 # =====================================================================
@@ -1997,22 +2074,11 @@ def acquire_single_instance_lock() -> bool:
         BOT_RUNTIME_STATUS["single_instance_locked"] = True
         return True
     except OSError:
-        logger.warning(
-            "⚠️ Another local process already holds %s — skipping duplicate polling in this worker.",
-            lock_path,
-        )
         BOT_RUNTIME_STATUS["single_instance_locked"] = False
         return False
 
 
-async def _post_init(app: Application) -> None:
-    try:
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        BOT_RUNTIME_STATUS["webhook_cleared"] = True
-        logger.info("✅ Cleared webhook (drop_pending_updates=True)")
-    except TelegramError as e:
-        logger.warning("Webhook cleanup warning: %s", e)
-
+async def _configure_bot_commands(app: Application) -> None:
     commands = [
         BotCommand("start", "🚀 Start bot"),
         BotCommand("help", "ℹ️ Help"),
@@ -2035,7 +2101,11 @@ async def _post_init(app: Application) -> None:
             except TelegramError:
                 pass
     except TelegramError as e:
-        logger.warning("Commands set failed: %s", e)
+        logger.warning("Commands set notice: %s", e)
+
+
+async def _post_init(app: Application) -> None:
+    await _configure_bot_commands(app)
 
 
 def _common_fallbacks() -> list[Any]:
@@ -2056,6 +2126,7 @@ def _build_app(token: str | None = None) -> Application:
         Application.builder()
         .token(active_token)
         .defaults(defaults)
+        .updater(None)
         .post_init(_post_init)
         .build()
     )
@@ -2162,6 +2233,85 @@ def seed_demo_data_if_empty() -> None:
         )
 
 
+async def _run_bot_lifecycle() -> None:
+    """
+    Runs the Telegram Bot using Webhook mode on Render Web Services (when
+    RENDER_EXTERNAL_URL / RENDER_EXTERNAL_HOSTNAME / WEBHOOK_URL is available)
+    so getUpdates Conflict is 100% impossible, or via the direct _custom_polling_loop
+    that bypasses telegram.ext._updater completely.
+    """
+    global _ACTIVE_PTB_APP, _ACTIVE_BOT_LOOP
+    _ACTIVE_BOT_LOOP = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            _ACTIVE_BOT_LOOP.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, RuntimeError):
+            pass
+
+    app = _build_app(BOT_TOKEN)
+    _ACTIVE_PTB_APP = app
+
+    await app.initialize()
+    await _configure_bot_commands(app)
+    await app.start()
+
+    webhook_base = resolve_webhook_base_url()
+    if webhook_base:
+        webhook_url = f"{webhook_base}/telegram-webhook"
+        try:
+            await app.bot.set_webhook(
+                url=webhook_url,
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+            )
+            BOT_RUNTIME_STATUS["mode"] = "webhook_live"
+            BOT_RUNTIME_STATUS["bot_running"] = True
+            BOT_RUNTIME_STATUS["webhook_url"] = webhook_url
+            logger.info(
+                "✅ Bot started in WEBHOOK mode: %s (Zero getUpdates Conflict!)",
+                webhook_url,
+            )
+
+            async def _webhook_watchdog() -> None:
+                while not stop_event.is_set():
+                    await asyncio.sleep(20.0)
+                    if stop_event.is_set():
+                        break
+                    try:
+                        info = await app.bot.get_webhook_info()
+                        if getattr(info, "url", "") != webhook_url:
+                            await app.bot.set_webhook(
+                                url=webhook_url,
+                                allowed_updates=Update.ALL_TYPES,
+                            )
+                            logger.info("🔄 Restored webhook URL: %s", webhook_url)
+                    except Exception:
+                        pass
+
+            watchdog_task = asyncio.create_task(_webhook_watchdog())
+            await stop_event.wait()
+            watchdog_task.cancel()
+        except TelegramError as e:
+            logger.warning("Webhook setup notice (%s); switching to direct update queue.", e)
+            webhook_base = ""
+
+    if not webhook_base:
+        BOT_RUNTIME_STATUS["mode"] = "polling_live"
+        BOT_RUNTIME_STATUS["bot_running"] = True
+        await _custom_polling_loop(app, stop_event)
+
+    logger.info("🛑 Shutting down bot cleanly…")
+    BOT_RUNTIME_STATUS["bot_running"] = False
+    try:
+        if app.running:
+            await app.stop()
+        await app.shutdown()
+    except Exception:
+        pass
+
+
 def main() -> None:
     init_db()
     logger.info("Database initialized: %s", DB_PATH)
@@ -2173,61 +2323,35 @@ def main() -> None:
         seed_demo_data_if_empty()
         from app import run_control_center_server
 
-        run_control_center_server(port=port)
+        run_control_center_server(port=port, acquire_lock=True)
         return
 
     if not acquire_single_instance_lock():
         BOT_RUNTIME_STATUS["mode"] = "standby_lock_held"
-        logger.warning("Another instance holds the lock; exiting duplicate worker cleanly.")
+        logger.warning("Another local process holds the lock; exiting duplicate worker cleanly.")
         return
 
-    def _run_health_server() -> None:
+    # Start the HTTP Control Center & Webhook receiver on 0.0.0.0:$PORT immediately
+    def _run_http_server() -> None:
         try:
             from app import run_control_center_server
 
-            run_control_center_server(port=port)
+            run_control_center_server(port=port, acquire_lock=False)
         except Exception as e:
-            logger.warning("Health server notice: %s", e)
+            logger.warning("HTTP server notice: %s", e)
 
-    threading.Thread(target=_run_health_server, daemon=True).start()
+    threading.Thread(target=_run_http_server, daemon=True).start()
 
-    while True:
-        try:
-            BOT_RUNTIME_STATUS["mode"] = "polling_live"
-            BOT_RUNTIME_STATUS["bot_running"] = True
-            app = _build_app(BOT_TOKEN)
-            logger.info("Starting bot in polling mode (Conflict guard active)…")
-            app.run_polling(
-                drop_pending_updates=True,
-                allowed_updates=Update.ALL_TYPES,
-                close_loop=False,
-            )
-            break
-        except Conflict as e:
-            BOT_RUNTIME_STATUS["conflict_count"] = (
-                int(BOT_RUNTIME_STATUS.get("conflict_count", 0)) + 1
-            )
-            BOT_RUNTIME_STATUS["last_conflict_at"] = now_iso()
-            BOT_RUNTIME_STATUS["last_error"] = str(e)
-            logger.warning(
-                "⚠️ Conflict during startup polling (%s) — waiting 6s for previous instance to stop…",
-                e,
-            )
-            time.sleep(6)
-        except InvalidToken as e:
-            BOT_RUNTIME_STATUS["mode"] = "invalid_token"
-            BOT_RUNTIME_STATUS["bot_running"] = False
-            BOT_RUNTIME_STATUS["last_error"] = f"InvalidToken: {e}"
-            logger.error(
-                "❌ BOT_TOKEN rejected by Telegram (%s). Keeping Control Center alive.",
-                e,
-            )
-            while True:
-                time.sleep(3600)
-        except Exception as e:
-            BOT_RUNTIME_STATUS["last_error"] = str(e)
-            logger.exception("Unexpected polling error, retrying in 5s: %s", e)
-            time.sleep(5)
+    try:
+        asyncio.run(_run_bot_lifecycle())
+    except InvalidToken as e:
+        BOT_RUNTIME_STATUS["mode"] = "invalid_token"
+        BOT_RUNTIME_STATUS["bot_running"] = False
+        BOT_RUNTIME_STATUS["last_error"] = f"InvalidToken: {e}"
+        logger.error("❌ BOT_TOKEN rejected by Telegram (%s).", e)
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
