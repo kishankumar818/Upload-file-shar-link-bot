@@ -212,6 +212,68 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"Unknown action: {action}")
 
 
+FALLBACK_INDEX_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Premium File Vault — Protected Control Center</title>
+  <style>
+    body { margin:0; font-family: system-ui, -apple-system, sans-serif; background:#070b14; color:#f8fafc; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+    .card { background:#0f172a; border:1px solid rgba(56,189,248,0.28); border-radius:18px; padding:32px; width:100%; max-width:420px; box-shadow:0 24px 60px rgba(0,0,0,0.65); text-align:center; }
+    h1 { margin:0 0 8px; font-size:22px; }
+    p { margin:0 0 20px; color:#94a3b8; font-size:14px; }
+    input { width:100%; box-sizing:border-box; padding:12px 14px; border-radius:10px; border:1px solid #334155; background:#090d16; color:#fff; font-size:14px; margin-bottom:12px; }
+    button { width:100%; padding:12px; border-radius:10px; border:none; background:linear-gradient(135deg,#38bdf8,#0284c7); color:#04101d; font-weight:700; cursor:pointer; font-size:14px; }
+    .err { color:#f43f5e; font-size:13px; margin-bottom:10px; display:none; }
+    .dash { display:none; text-align:left; margin-top:16px; border-top:1px solid #1e293b; padding-top:16px; font-size:13px; color:#cbd5e1; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="font-size:36px;margin-bottom:10px;">🔐</div>
+    <h1>Premium File Vault</h1>
+    <p>Enter Vault Master Password to unlock Control Center</p>
+    <div id="err" class="err">❌ Galat password! Sahi Vault Password daalein.</div>
+    <div id="form">
+      <input id="pw" type="password" placeholder="Enter Vault Master Password..." />
+      <button onclick="unlock()">🔓 Unlock Control Center</button>
+    </div>
+    <div id="dash" class="dash"></div>
+  </div>
+  <script>
+    async function unlock() {
+      const pw = document.getElementById('pw').value.trim();
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: pw})
+      });
+      const data = await res.json();
+      if (!res.ok || !data.authenticated) {
+        document.getElementById('err').style.display = 'block';
+        return;
+      }
+      document.getElementById('err').style.display = 'none';
+      document.getElementById('form').style.display = 'none';
+      const d = document.getElementById('dash');
+      d.style.display = 'block';
+      d.innerHTML = '<b>✅ Vault Unlocked</b><br><br>' +
+        '<b>Bot Name:</b> ' + (data.state?.config?.bot_name || '') + '<br>' +
+        '<b>Database:</b> ' + (data.state?.config?.db_path || 'bot_data.db') + '<br>' +
+        '<b>Channels:</b> ' + (data.state?.stats?.channels ?? 0) + ' | <b>Files:</b> ' + (data.state?.stats?.files ?? 0) + ' | <b>Users:</b> ' + (data.state?.stats?.users ?? 0);
+    }
+  </script>
+</body>
+</html>
+"""
+
+
+class VaultHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 class VaultRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -221,8 +283,19 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_html(self, content: bytes, status: int = 200) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(content)
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -235,12 +308,38 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
         header_pw = self.headers.get("X-Vault-Password", "")
         return verify_dashboard_password(header_pw)
 
+    def do_HEAD(self) -> None:
+        """
+        Render's port detector & load-balancer readiness probe sends HTTP HEAD /
+        requests. Always respond 200 OK immediately so deploys succeed in <2s.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(200)
+        self.send_header("Allow", "GET, HEAD, POST, DELETE, OPTIONS")
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
 
-        # Public health check for Render & uptime monitors
-        if path == "/api/health":
+        # Public health check endpoints for Render & uptime monitors (no password)
+        if path in (
+            "/api/health",
+            "/health",
+            "/healthz",
+            "/ping",
+            "/status",
+            "/ready",
+            "/live",
+        ):
             self._send_json(
                 {
                     "status": "ok",
@@ -254,21 +353,12 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/state":
             if not self._is_authorized():
-                self._send_json({"detail": "Unauthorized — Vault Password required"}, status=401)
+                self._send_json(
+                    {"detail": "Unauthorized — Vault Password required"}, status=401
+                )
                 return
             self._send_json(build_full_state())
             return
-
-        if path == "/" or path == "/index.html":
-            index_file = STATIC_DIR / "index.html"
-            if index_file.exists():
-                content = index_file.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
-                return
 
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
@@ -279,11 +369,23 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", ctype or "application/octet-stream")
                 self.send_header("Content-Length", str(len(content)))
+                self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(content)
                 return
+            self._send_json({"detail": "Static asset not found"}, status=404)
+            return
 
-        self._send_json({"detail": "Not found"}, status=404)
+        if path.startswith("/api/"):
+            self._send_json({"detail": "Not found"}, status=404)
+            return
+
+        # Serve index.html (or built-in fallback HTML if static/ folder wasn't deployed) with 200 OK
+        index_file = STATIC_DIR / "index.html"
+        if index_file.exists():
+            self._send_html(index_file.read_bytes(), status=200)
+        else:
+            self._send_html(FALLBACK_INDEX_HTML.encode("utf-8"), status=200)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -294,35 +396,41 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"detail": "Invalid JSON payload"}, status=400)
             return
 
-        # 1. Telegram Webhook Receiver (for Render Web Services — Zero Conflict!)
+        # 1. Telegram Webhook Receiver (for Render Web Services — Zero Conflict, No Password!)
         if path == "/telegram-webhook":
             ptb_app, bot_loop = bot_core.get_active_bot_app()
             if ptb_app is not None and bot_loop is not None:
                 try:
                     update_obj = bot_core.Update.de_json(body, ptb_app.bot)
-                    asyncio.run_coroutine_threadsafe(
-                        ptb_app.process_update(update_obj), bot_loop
-                    )
+                    if update_obj is not None:
+                        asyncio.run_coroutine_threadsafe(
+                            ptb_app.update_queue.put(update_obj), bot_loop
+                        )
                 except Exception as e:
                     bot_core.logger.warning("Webhook update error: %s", e)
             self._send_json({"ok": True})
             return
 
-        # 2. Password Login Endpoint
+        # 2. Website Password Login Endpoint
         if path == "/api/login":
             pw = str(body.get("password") or "")
             if verify_dashboard_password(pw):
                 self._send_json({"authenticated": True, "state": build_full_state()})
             else:
                 self._send_json(
-                    {"authenticated": False, "detail": "❌ Galat password! Sahi Vault Password daalein."},
+                    {
+                        "authenticated": False,
+                        "detail": "❌ Galat password! Sahi Vault Password daalein.",
+                    },
                     status=401,
                 )
             return
 
-        # All other /api/* endpoints require password authentication
+        # All other /api/* endpoints require website password authentication
         if not self._is_authorized():
-            self._send_json({"detail": "Unauthorized — Vault Password required"}, status=401)
+            self._send_json(
+                {"detail": "Unauthorized — Vault Password required"}, status=401
+            )
             return
 
         if path == "/api/config":
@@ -408,7 +516,9 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         if not self._is_authorized():
-            self._send_json({"detail": "Unauthorized — Vault Password required"}, status=401)
+            self._send_json(
+                {"detail": "Unauthorized — Vault Password required"}, status=401
+            )
             return
 
         parsed = urlparse(self.path)
@@ -437,17 +547,24 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"detail": "Not found"}, status=404)
 
 
-def run_control_center_server(port: int = 3000, acquire_lock: bool = False) -> None:
+def create_control_center_server(
+    port: int = 3000, acquire_lock: bool = False
+) -> VaultHTTPServer:
     bot_core.init_db()
     bot_core.seed_demo_data_if_empty()
     if acquire_lock:
         bot_core.acquire_single_instance_lock()
-    server = ThreadingHTTPServer(("0.0.0.0", port), VaultRequestHandler)
+    server = VaultHTTPServer(("0.0.0.0", port), VaultRequestHandler)
     bot_core.logger.info(
         "🌐 Premium File Vault Control Center (Password Protected) listening on http://0.0.0.0:%d",
         port,
     )
-    server.serve_forever()
+    return server
+
+
+def run_control_center_server(port: int = 3000, acquire_lock: bool = False) -> None:
+    server = create_control_center_server(port=port, acquire_lock=acquire_lock)
+    server.serve_forever(poll_interval=0.1)
 
 
 if __name__ == "__main__":

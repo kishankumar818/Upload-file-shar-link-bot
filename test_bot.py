@@ -140,6 +140,98 @@ class PremiumFileVaultTests(unittest.TestCase):
         )
         self.assertIn("Conflict:", bot_core.BOT_RUNTIME_STATUS["last_error"])
 
+    def test_dashboard_password_verification(self):
+        import app as web_app
+
+        self.assertTrue(
+            web_app.verify_dashboard_password(
+                "FREE00000000GHGGHGHGHGH444555Kishan1122@8441"
+            )
+        )
+        self.assertFalse(web_app.verify_dashboard_password("wrong_password"))
+        self.assertFalse(web_app.verify_dashboard_password(""))
+        self.assertFalse(web_app.verify_dashboard_password(None))
+
+    def test_webhook_url_detection_for_render(self):
+        old_render = os.environ.get("RENDER_EXTERNAL_URL")
+        old_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+        old_poll = os.environ.get("USE_POLLING")
+        try:
+            os.environ.pop("USE_POLLING", None)
+            os.environ["RENDER_EXTERNAL_URL"] = "https://upload-file-shar-link-bot.onrender.com/"
+            self.assertEqual(
+                bot_core.resolve_webhook_base_url(),
+                "https://upload-file-shar-link-bot.onrender.com",
+            )
+            os.environ.pop("RENDER_EXTERNAL_URL", None)
+            os.environ["RENDER_EXTERNAL_HOSTNAME"] = "upload-file-shar-link-bot.onrender.com"
+            self.assertEqual(
+                bot_core.resolve_webhook_base_url(),
+                "https://upload-file-shar-link-bot.onrender.com",
+            )
+        finally:
+            if old_render is None:
+                os.environ.pop("RENDER_EXTERNAL_URL", None)
+            else:
+                os.environ["RENDER_EXTERNAL_URL"] = old_render
+            if old_host is None:
+                os.environ.pop("RENDER_EXTERNAL_HOSTNAME", None)
+            else:
+                os.environ["RENDER_EXTERNAL_HOSTNAME"] = old_host
+            if old_poll is None:
+                os.environ.pop("USE_POLLING", None)
+            else:
+                os.environ["USE_POLLING"] = old_poll
+
+    def test_render_http_head_and_get_readiness_probes(self):
+        import http.client
+        import threading
+        import app as web_app
+
+        server = web_app.VaultHTTPServer(("127.0.0.1", 0), web_app.VaultRequestHandler)
+        port = server.server_address[1]
+        t = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+        )
+        t.start()
+        try:
+            # 1. HEAD / (Render port scanner & load balancer probe) -> must be 200 OK
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            conn.request("HEAD", "/")
+            res = conn.getresponse()
+            self.assertEqual(res.status, 200)
+            conn.close()
+
+            # 2. GET /healthz -> must be 200 OK
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            conn.request("GET", "/healthz")
+            res = conn.getresponse()
+            self.assertEqual(res.status, 200)
+            conn.close()
+
+            # 3. GET /api/state without password -> must be 401
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            conn.request("GET", "/api/state")
+            res = conn.getresponse()
+            self.assertEqual(res.status, 401)
+            conn.close()
+
+            # 4. GET /api/state with password -> must be 200
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            conn.request(
+                "GET",
+                "/api/state",
+                headers={
+                    "X-Vault-Password": "FREE00000000GHGGHGHGHGH444555Kishan1122@8441"
+                },
+            )
+            res = conn.getresponse()
+            self.assertEqual(res.status, 200)
+            conn.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

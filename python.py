@@ -2275,6 +2275,18 @@ async def _run_bot_lifecycle() -> None:
             )
 
             async def _webhook_watchdog() -> None:
+                # Re-verify shortly after Render switches live traffic, then every 20s
+                for delay in (5.0, 12.0):
+                    await asyncio.sleep(delay)
+                    if stop_event.is_set():
+                        return
+                    try:
+                        await app.bot.set_webhook(
+                            url=webhook_url,
+                            allowed_updates=Update.ALL_TYPES,
+                        )
+                    except Exception:
+                        pass
                 while not stop_event.is_set():
                     await asyncio.sleep(20.0)
                     if stop_event.is_set():
@@ -2331,16 +2343,20 @@ def main() -> None:
         logger.warning("Another local process holds the lock; exiting duplicate worker cleanly.")
         return
 
-    # Start the HTTP Control Center & Webhook receiver on 0.0.0.0:$PORT immediately
-    def _run_http_server() -> None:
-        try:
-            from app import run_control_center_server
+    # Bind HTTP Control Center & Webhook receiver on 0.0.0.0:$PORT synchronously
+    # BEFORE entering the asyncio bot loop so Render detects the HTTP port in <1s
+    http_server = None
+    try:
+        from app import create_control_center_server
 
-            run_control_center_server(port=port, acquire_lock=False)
-        except Exception as e:
-            logger.warning("HTTP server notice: %s", e)
-
-    threading.Thread(target=_run_http_server, daemon=True).start()
+        http_server = create_control_center_server(port=port, acquire_lock=False)
+        threading.Thread(
+            target=http_server.serve_forever,
+            kwargs={"poll_interval": 0.1},
+            daemon=True,
+        ).start()
+    except Exception as e:
+        logger.warning("HTTP server notice: %s", e)
 
     try:
         asyncio.run(_run_bot_lifecycle())
@@ -2352,6 +2368,12 @@ def main() -> None:
         threading.Event().wait()
     except KeyboardInterrupt:
         pass
+    finally:
+        if http_server is not None:
+            try:
+                http_server.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
