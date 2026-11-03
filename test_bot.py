@@ -25,6 +25,9 @@ class PremiumFileVaultTests(unittest.TestCase):
         self.tmp_dir.cleanup()
 
     def test_dashboard_password_verification(self):
+        req_file = Path(__file__).resolve().parent / "requirements.txt"
+        self.assertTrue(req_file.is_file(), "requirements.txt must exist for Render")
+        self.assertIn("python-telegram-bot", req_file.read_text(encoding="utf-8"))
         self.assertFalse(web_app.verify_dashboard_password(""))
         self.assertFalse(web_app.verify_dashboard_password(None))
         self.assertFalse(web_app.verify_dashboard_password("wrong_password_123"))
