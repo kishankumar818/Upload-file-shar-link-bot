@@ -1,0 +1,123 @@
+{
+  "channels": [
+    {
+      "id": 1,
+      "chat_id": -1001987654321,
+      "title": "Premium File Vault Updates",
+      "username": "PremiumVaultUpdates",
+      "invite_link": "https://t.me/PremiumVaultUpdates",
+      "added_at": "2026-11-03T12:49:14.088006+00:00"
+    }
+  ],
+  "files": [
+    {
+      "id": 1,
+      "tg_file_id": "BQACAgUAAxkBAAIBZ2X_demo_masterclass_pack",
+      "file_type": "document",
+      "file_name": "Premium_Vault_Starter_Bundle_v2.zip",
+      "custom_name": "StarterBundle",
+      "group_name": "",
+      "random_code": "482915",
+      "share_code": "StarterBundle?482915",
+      "external_url": "",
+      "is_permanent": 1,
+      "caption": "Exclusive Premium File Vault Starter Bundle — Permanent Protected File",
+      "created_by": 123456789,
+      "created_at": "2026-11-03T12:49:14.088451+00:00",
+      "downloads": 0,
+      "uploader_role": "admin",
+      "expires_at": ""
+    },
+    {
+      "id": 2,
+      "tg_file_id": "AgACAgUAAxkBAAIB_group_banner_hd",
+      "file_type": "photo",
+      "file_name": "VIP_Group_Poster_4K.jpg",
+      "custom_name": "Poster4K",
+      "group_name": "VIPGroup",
+      "random_code": "739204",
+      "share_code": "VIPGroup?Poster4K=739204",
+      "external_url": "",
+      "is_permanent": 1,
+      "caption": "Permanent Group Image Upload — Never Auto-Deletes",
+      "created_by": 123456789,
+      "created_at": "2026-11-03T12:49:14.088710+00:00",
+      "downloads": 0,
+      "uploader_role": "admin",
+      "expires_at": ""
+    },
+    {
+      "id": 3,
+      "tg_file_id": "https://t.me/PremiumVaultUpdates",
+      "file_type": "link",
+      "file_name": "VIP Mega Cloud Folder Link",
+      "custom_name": "MegaCloud",
+      "group_name": "",
+      "random_code": "5928",
+      "share_code": "MegaCloud?5928",
+      "external_url": "https://t.me/PremiumVaultUpdates",
+      "is_permanent": 1,
+      "caption": "Direct Cloud Link unlocked via Start button",
+      "created_by": 123456789,
+      "created_at": "2026-11-03T12:49:14.088913+00:00",
+      "downloads": 0,
+      "uploader_role": "admin",
+      "expires_at": ""
+    }
+  ],
+  "group_banner": [
+    {
+      "id": 1,
+      "banner_file_id": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800",
+      "banner_type": "photo",
+      "description": "🔥 Official VIP Vault Group! Har 15 minute me latest file & direct link updates yahan milengi.",
+      "verified": 1,
+      "updated_at": "2026-11-03T12:49:14.089109+00:00"
+    }
+  ],
+  "managed_groups": [
+    {
+      "id": 1,
+      "chat_id": -1001555666777,
+      "title": "VIP File Share Discussion Group",
+      "username": "VIPFileDiscussion",
+      "invite_link": "https://t.me/VIPFileDiscussion",
+      "banner_file_id": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800",
+      "description": "🔥 Official VIP Vault Group! Har 15 minute me latest file & direct link updates yahan milengi.",
+      "interval_minutes": 15,
+      "last_message_id": 101,
+      "last_sent_at": "2026-11-03T12:49:43.758970+00:00",
+      "send_count": 1,
+      "active": 1,
+      "added_by": 123456789,
+      "added_at": "2026-11-03T12:49:14.089377+00:00"
+    }
+  ],
+  "bot_builder": [
+    {
+      "id": 1,
+      "description": "🦄 ✨ Kya aap apna khud ka 24/7 Ultra-Fast File & Link Share Bot banana chahte hain? Yahan se aap 1 click me apna Bot create kar sakte hain! Aapke bot me 24/7 Instant <1s Start Reply, 2 Apne Force-Join Channels (+ 2 Official Channels), aur /user-upload (1-Week Cloud Vault) milega!",
+      "allow_bot_build": 1,
+      "allow_user_upload": 1,
+      "allow_user_two_channels": 1,
+      "user_file_expiry_days": 7,
+      "updated_at": "2026-11-03T13:20:21.969241+00:00"
+    }
+  ],
+  "user_bots": [
+    {
+      "id": 1,
+      "owner_user_id": 987654321,
+      "owner_name": "Rahul Kumar",
+      "bot_token": "7123456789:AAH1234567890abcdefGHIJKLMNOPQRSTUV",
+      "bot_username": "RahulUnicorn_bot",
+      "bot_name": "🦄 Rahul Fast Vault Bot",
+      "channel_1_title": "Rahul Tech Channel #1",
+      "channel_1_link": "https://t.me/RahulTechChannel1",
+      "channel_2_title": "Rahul Movies Channel #2",
+      "channel_2_link": "https://t.me/RahulMoviesChannel2",
+      "status": "online_24_7",
+      "created_at": "2026-11-03T13:20:21.969702+00:00"
+    }
+  ]
+}

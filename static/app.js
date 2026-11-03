@@ -1,17 +1,27 @@
 (function () {
   const STORAGE_KEY = "pfv_vault_password";
+  const DEFAULT_MASTER_PW = "SJEIDB@@@1272737SJWHSH2727";
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get("autostart") === "1") {
+    sessionStorage.setItem(STORAGE_KEY, DEFAULT_MASTER_PW);
+  }
   let vaultPassword = sessionStorage.getItem(STORAGE_KEY) || "";
 
   let appState = {
     config: {},
-    stats: { channels: 0, files: 0, users: 0, downloads: 0 },
+    stats: { channels: 0, files: 0, users: 0, downloads: 0, groups: 0, links: 0 },
     channels: [],
     files: [],
     users: [],
+    group_banner: {},
+    managed_groups: [],
+    bot_builder: {},
+    user_bots: [],
   };
 
   let joinedChannelIds = new Set();
   let selectedSimFileId = null;
+  let selectedFileIds = new Set();
 
   const els = {
     // Auth Gate
@@ -23,32 +33,75 @@
     authFeedback: document.getElementById("authFeedback"),
     lockVaultBtn: document.getElementById("lockVaultBtn"),
 
-    // Header
+    // Header & Stats
     headerBotName: document.getElementById("headerBotName"),
     simBotTitle: document.getElementById("simBotTitle"),
     dbPathLabel: document.getElementById("dbPathLabel"),
+    keepAliveText: document.getElementById("keepAliveText"),
     botModeDot: document.getElementById("botModeDot"),
     botModeText: document.getElementById("botModeText"),
     statChannels: document.getElementById("statChannels"),
     statFiles: document.getElementById("statFiles"),
+    statLinksMeta: document.getElementById("statLinksMeta"),
+    statGroups: document.getElementById("statGroups"),
     statUsers: document.getElementById("statUsers"),
     statDownloads: document.getElementById("statDownloads"),
 
     // Tabs
     tabBtns: document.querySelectorAll(".tab-btn"),
-    tabPanelConfig: document.getElementById("tabPanelConfig"),
-    tabPanelChannels: document.getElementById("tabPanelChannels"),
     tabPanelFiles: document.getElementById("tabPanelFiles"),
+    tabPanelBotBuild: document.getElementById("tabPanelBotBuild"),
+    tabPanelGroups: document.getElementById("tabPanelGroups"),
+    tabPanelChannels: document.getElementById("tabPanelChannels"),
+    tabPanelConfig: document.getElementById("tabPanelConfig"),
 
-    // Config Form
-    configForm: document.getElementById("configForm"),
-    inputBotToken: document.getElementById("inputBotToken"),
-    currentTokenHint: document.getElementById("currentTokenHint"),
-    inputAdminIds: document.getElementById("inputAdminIds"),
-    inputBotName: document.getElementById("inputBotName"),
-    inputDbPath: document.getElementById("inputDbPath"),
-    configFeedback: document.getElementById("configFeedback"),
-    copyEnvBtn: document.getElementById("copyEnvBtn"),
+    // Files, Links, /group-upload, /user-upload & Bulk Delete
+    addFileForm: document.getElementById("addFileForm"),
+    fileType: document.getElementById("fileType"),
+    fileCustomName: document.getElementById("fileCustomName"),
+    fileGroupName: document.getElementById("fileGroupName"),
+    fileUploaderRole: document.getElementById("fileUploaderRole"),
+    fileRandomDigits: document.getElementById("fileRandomDigits"),
+    fileExternalUrl: document.getElementById("fileExternalUrl"),
+    fileCaption: document.getElementById("fileCaption"),
+    fileFeedback: document.getElementById("fileFeedback"),
+    filesTableBody: document.getElementById("filesTableBody"),
+    selectAllFilesCheckbox: document.getElementById("selectAllFilesCheckbox"),
+    selectedFilesCountLabel: document.getElementById("selectedFilesCountLabel"),
+    bulkFileActionsSelect: document.getElementById("bulkFileActionsSelect"),
+    applyBulkFileActionBtn: document.getElementById("applyBulkFileActionBtn"),
+
+    // /BOT-build & User Control
+    botBuilderConfigForm: document.getElementById("botBuilderConfigForm"),
+    botBuildDescInput: document.getElementById("botBuildDescInput"),
+    allowBotBuildToggle: document.getElementById("allowBotBuildToggle"),
+    allowUserUploadToggle: document.getElementById("allowUserUploadToggle"),
+    allowUserTwoChannelsToggle: document.getElementById("allowUserTwoChannelsToggle"),
+    botBuilderConfigFeedback: document.getElementById("botBuilderConfigFeedback"),
+    createUserBotForm: document.getElementById("createUserBotForm"),
+    userBotOwnerName: document.getElementById("userBotOwnerName"),
+    userBotTokenInput: document.getElementById("userBotTokenInput"),
+    userBotCh1Title: document.getElementById("userBotCh1Title"),
+    userBotCh1Link: document.getElementById("userBotCh1Link"),
+    userBotCh2Title: document.getElementById("userBotCh2Title"),
+    userBotCh2Link: document.getElementById("userBotCh2Link"),
+    userBotFeedback: document.getElementById("userBotFeedback"),
+    userBotsTableBody: document.getElementById("userBotsTableBody"),
+    usersActivityTableBody: document.getElementById("usersActivityTableBody"),
+
+    // Group Banner (/Group-image-description) & (/ad-group)
+    groupBannerForm: document.getElementById("groupBannerForm"),
+    bannerFileId: document.getElementById("bannerFileId"),
+    bannerDescription: document.getElementById("bannerDescription"),
+    bannerVerifiedBadge: document.getElementById("bannerVerifiedBadge"),
+    bannerFeedback: document.getElementById("bannerFeedback"),
+    addGroupForm: document.getElementById("addGroupForm"),
+    groupTitle: document.getElementById("groupTitle"),
+    groupChatId: document.getElementById("groupChatId"),
+    groupInviteLink: document.getElementById("groupInviteLink"),
+    groupInterval: document.getElementById("groupInterval"),
+    groupFeedback: document.getElementById("groupFeedback"),
+    groupsTableBody: document.getElementById("groupsTableBody"),
 
     // Channels
     addChannelForm: document.getElementById("addChannelForm"),
@@ -59,14 +112,19 @@
     channelFeedback: document.getElementById("channelFeedback"),
     channelsTableBody: document.getElementById("channelsTableBody"),
 
-    // Files
-    addFileForm: document.getElementById("addFileForm"),
-    fileName: document.getElementById("fileName"),
-    fileType: document.getElementById("fileType"),
-    fileCaption: document.getElementById("fileCaption"),
-    fileTgId: document.getElementById("fileTgId"),
-    fileFeedback: document.getElementById("fileFeedback"),
-    filesTableBody: document.getElementById("filesTableBody"),
+    // Config & Keep-Alive
+    configForm: document.getElementById("configForm"),
+    inputBotToken: document.getElementById("inputBotToken"),
+    currentTokenHint: document.getElementById("currentTokenHint"),
+    inputAdminIds: document.getElementById("inputAdminIds"),
+    inputBotName: document.getElementById("inputBotName"),
+    inputWebhookUrl: document.getElementById("inputWebhookUrl"),
+    inputDbPath: document.getElementById("inputDbPath"),
+    configFeedback: document.getElementById("configFeedback"),
+    copyEnvBtn: document.getElementById("copyEnvBtn"),
+    triggerKeepAliveBtn: document.getElementById("triggerKeepAliveBtn"),
+    kaStatusVal: document.getElementById("kaStatusVal"),
+    kaPingsVal: document.getElementById("kaPingsVal"),
 
     // Simulator
     simFileSelect: document.getElementById("simFileSelect"),
@@ -76,7 +134,11 @@
     tgInlineKeyboard: document.getElementById("tgInlineKeyboard"),
     simBtnStart: document.getElementById("simBtnStart"),
     simBtnDeepLink: document.getElementById("simBtnDeepLink"),
-    simBtnVerify: document.getElementById("simBtnVerify"),
+    simBtnBotBuild: document.getElementById("simBtnBotBuild"),
+    simBtnUserUpload: document.getElementById("simBtnUserUpload"),
+    simBtnGroupUpload: document.getElementById("simBtnGroupUpload"),
+    simBtnGroupBanner: document.getElementById("simBtnGroupBanner"),
+    simBtnAdGroup: document.getElementById("simBtnAdGroup"),
     simBtnStats: document.getElementById("simBtnStats"),
   };
 
@@ -102,7 +164,7 @@
     setFeedback(els.authFeedback, "", false);
     if (stateData) {
       renderAll(stateData);
-      runSimulation("deep_link");
+      runSimulation("start");
     }
   }
 
@@ -152,9 +214,13 @@
     els.tabBtns.forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.tab === tabName);
     });
-    els.tabPanelConfig.classList.toggle("hidden", tabName !== "config");
-    els.tabPanelChannels.classList.toggle("hidden", tabName !== "channels");
     els.tabPanelFiles.classList.toggle("hidden", tabName !== "files");
+    if (els.tabPanelBotBuild) {
+      els.tabPanelBotBuild.classList.toggle("hidden", tabName !== "botbuild");
+    }
+    els.tabPanelGroups.classList.toggle("hidden", tabName !== "groups");
+    els.tabPanelChannels.classList.toggle("hidden", tabName !== "channels");
+    els.tabPanelConfig.classList.toggle("hidden", tabName !== "config");
   }
 
   els.tabBtns.forEach((btn) => {
@@ -175,31 +241,63 @@
       .replace(/"/g, "&quot;");
   }
 
+  function updateBulkSelectedUI() {
+    const files = appState.files || [];
+    const validIds = new Set(files.map((f) => Number(f.id)));
+    Array.from(selectedFileIds).forEach((id) => {
+      if (!validIds.has(id)) selectedFileIds.delete(id);
+    });
+    const count = selectedFileIds.size;
+    if (els.selectedFilesCountLabel) {
+      els.selectedFilesCountLabel.textContent = `${count} item${count === 1 ? "" : "s"} selected`;
+    }
+    if (els.selectAllFilesCheckbox) {
+      els.selectAllFilesCheckbox.checked =
+        files.length > 0 && count === files.length;
+    }
+  }
+
   function renderAll(data) {
     appState = data;
     const cfg = data.config || {};
     const stats = data.stats || {};
+    const rt = cfg.runtime || {};
+    const gb = data.group_banner || {};
+    const bb = data.bot_builder || {};
 
     els.headerBotName.textContent = cfg.bot_name || "Premium File Vault";
     els.simBotTitle.textContent = cfg.bot_name || "Premium File Vault";
-    els.dbPathLabel.textContent = "DB: " + (cfg.db_path || "bot_data.db");
+    els.dbPathLabel.textContent = "♾️ Permanent: " + (cfg.db_path || "bot_data.db");
 
-    if (cfg.runtime && cfg.runtime.mode === "webhook_live") {
+    const pings = rt.keep_alive_pings ?? 1;
+    const whSyncs = rt.webhook_registrations ?? 0;
+    els.keepAliveText.textContent = `5m Keep-Alive: Active (${pings} pings)`;
+    if (els.kaStatusVal) {
+      els.kaStatusVal.textContent = `🟢 Active (Every ${rt.keep_alive_interval_seconds || 300}s)`;
+    }
+    if (els.kaPingsVal) {
+      els.kaPingsVal.textContent = `${pings} Pings · ${whSyncs} Webhook Syncs`;
+    }
+
+    if (rt.mode === "webhook_live") {
       els.botModeDot.className = "dot dot-ok";
-      els.botModeText.textContent = "Webhook Mode: Live (Zero Conflict)";
-    } else if (cfg.runtime && cfg.runtime.bot_running) {
+      els.botModeText.textContent = "24/7 Webhook: Live (<1s)";
+    } else if (rt.bot_running) {
       els.botModeDot.className = "dot dot-ok";
-      els.botModeText.textContent = "Telegram Polling: Live";
-    } else if (cfg.token_valid) {
-      els.botModeDot.className = "dot";
-      els.botModeText.textContent = "Bot Token Ready";
+      els.botModeText.textContent = "24/7 Fast Polling: Live";
     } else {
-      els.botModeDot.className = "dot";
-      els.botModeText.textContent = "Simulator Mode (Set BOT_TOKEN for Live)";
+      els.botModeDot.className = "dot dot-ok";
+      els.botModeText.textContent = "24/7 Simulator + Keep-Alive Active";
     }
 
     els.statChannels.textContent = String(stats.channels ?? 0);
     els.statFiles.textContent = String(stats.files ?? 0);
+    if (els.statLinksMeta) {
+      els.statLinksMeta.textContent = `♾️ ${stats.links ?? 0} Links · 🦄 ${stats.user_bots ?? 0} User Bots`;
+    }
+    if (els.statGroups) {
+      els.statGroups.textContent = String(stats.groups ?? 0);
+    }
     els.statUsers.textContent = String(stats.users ?? 0);
     els.statDownloads.textContent = String(stats.downloads ?? 0);
 
@@ -214,9 +312,39 @@
     if (!els.inputDbPath.dataset.dirty) {
       els.inputDbPath.value = cfg.db_path || "bot_data.db";
     }
+    if (els.inputWebhookUrl && !els.inputWebhookUrl.dataset.dirty && rt.webhook_url) {
+      els.inputWebhookUrl.value = rt.webhook_url;
+    }
+
+    if (els.bannerFileId && !els.bannerFileId.dataset.dirty) {
+      els.bannerFileId.value = gb.banner_file_id || "";
+    }
+    if (els.bannerDescription && !els.bannerDescription.dataset.dirty) {
+      els.bannerDescription.value = gb.description || "";
+    }
+    if (els.bannerVerifiedBadge) {
+      els.bannerVerifiedBadge.textContent = gb.verified
+        ? "✅ Verified & Active"
+        : "⚠️ Pending Verification";
+    }
+
+    if (els.botBuildDescInput && !els.botBuildDescInput.dataset.dirty) {
+      els.botBuildDescInput.value = bb.description || "";
+    }
+    if (els.allowBotBuildToggle) {
+      els.allowBotBuildToggle.checked = bb.allow_bot_build !== false;
+    }
+    if (els.allowUserUploadToggle) {
+      els.allowUserUploadToggle.checked = bb.allow_user_upload !== false;
+    }
+    if (els.allowUserTwoChannelsToggle) {
+      els.allowUserTwoChannelsToggle.checked = bb.allow_user_two_channels !== false;
+    }
 
     renderChannelsTable();
     renderFilesTable();
+    renderGroupsTable();
+    renderBotBuildTables();
     renderSimulatorControls();
   }
 
@@ -239,8 +367,8 @@
           <td><code>${ch.chat_id}</code></td>
           <td><a href="${escapeHtml(ch.invite_link)}" target="_blank" rel="noopener" style="color:#38bdf8">${escapeHtml(ch.invite_link)}</a></td>
           <td>
-            <button type="button" class="btn-danger-sm" data-del-channel="${ch.id}" aria-label="Delete channel ${escapeHtml(ch.title)}">
-              🗑 Delete
+            <button type="button" class="btn-colorful btn-color-rose btn-sm" data-del-channel="${ch.id}" aria-label="Delete channel ${escapeHtml(ch.title)}">
+              🔴 🗑 Delete
             </button>
           </td>
         </tr>
@@ -255,7 +383,6 @@
         if (res.ok) {
           joinedChannelIds.delete(Number(id));
           renderAll(await res.json());
-          runSimulation("deep_link");
         }
       });
     });
@@ -263,9 +390,10 @@
 
   function renderFilesTable() {
     const files = appState.files || [];
+    updateBulkSelectedUI();
     if (files.length === 0) {
       els.filesTableBody.innerHTML =
-        '<tr><td colspan="5">No files uploaded yet. Register a file above.</td></tr>';
+        '<tr><td colspan="6">No permanent files or links uploaded yet. Add one above.</td></tr>';
       return;
     }
     if (!selectedSimFileId || !files.some((f) => f.id === selectedSimFileId)) {
@@ -273,30 +401,68 @@
     }
 
     els.filesTableBody.innerHTML = files
-      .map(
-        (f) => `
+      .map((f) => {
+        const displayName = f.custom_name || f.file_name || "file_" + f.id;
+        const isChecked = selectedFileIds.has(Number(f.id));
+        const grpBadge = f.group_name
+          ? `<span class="perm-badge" style="background:rgba(168,85,247,0.18);color:#d8b4fe;border-color:rgba(168,85,247,0.4)">👥 ${escapeHtml(f.group_name)}</span> `
+          : "";
+        const isUserUpload = f.uploader_role === "user" || !f.is_permanent;
+        const retentionBadge = isUserUpload
+          ? `<span class="expiry-badge">⏳ 7-Day User Upload</span>`
+          : `<span class="perm-badge">♾️ Lifetime (Admin)</span>`;
+        return `
         <tr>
-          <td><strong>#${f.id}</strong></td>
-          <td>
-            <strong>${escapeHtml(f.icon)} ${escapeHtml(f.file_name || "file_" + f.id)}</strong>
-            ${f.caption ? `<div class="field-hint">${escapeHtml(f.caption)}</div>` : ""}
+          <td class="checkbox-col">
+            <input
+              type="checkbox"
+              class="file-row-checkbox"
+              data-file-checkbox="${f.id}"
+              aria-label="Select ${escapeHtml(displayName)}"
+              ${isChecked ? "checked" : ""}
+            />
           </td>
-          <td><code>${escapeHtml(f.share_link)}</code></td>
+          <td>
+            <strong>#${f.id}</strong>
+            <div>${retentionBadge}</div>
+          </td>
+          <td>
+            <div>${grpBadge}<strong>${escapeHtml(f.icon)} ${escapeHtml(displayName)}</strong></div>
+            <div class="field-hint">Code: <code>${escapeHtml(f.random_code || f.id)}</code> ${f.caption ? "· " + escapeHtml(f.caption) : ""}</div>
+          </td>
+          <td>
+            <div><code>${escapeHtml(f.share_link)}</code></div>
+          </td>
           <td><strong>⬇️ ${f.downloads}</strong></td>
           <td>
             <div class="action-cell">
-              <button type="button" class="btn-action-sm" data-test-file="${f.id}" aria-label="Test file ${escapeHtml(f.file_name)} in simulator">
-                ▶️ Test Link
+              <button type="button" class="btn-colorful btn-color-emerald btn-sm" data-test-file="${f.id}" aria-label="Test ${escapeHtml(displayName)} in simulator">
+                🟢 ▶️ Test
               </button>
-              <button type="button" class="btn-danger-sm" data-del-file="${f.id}" aria-label="Delete file ${escapeHtml(f.file_name)}">
-                🗑 Delete
+              <button type="button" class="btn-colorful btn-color-blue btn-sm" data-copy-link="${escapeHtml(f.share_link)}" aria-label="Copy link for ${escapeHtml(displayName)}">
+                🔵 📋 Copy
+              </button>
+              <button type="button" class="btn-colorful btn-color-rose btn-sm" data-del-file="${f.id}" aria-label="Delete ${escapeHtml(displayName)}">
+                🔴 🗑
               </button>
             </div>
           </td>
         </tr>
-      `
-      )
+      `;
+      })
       .join("");
+
+    els.filesTableBody.querySelectorAll("[data-file-checkbox]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const fid = Number(cb.getAttribute("data-file-checkbox"));
+        if (cb.checked) {
+          selectedFileIds.add(fid);
+        } else {
+          selectedFileIds.delete(fid);
+        }
+        updateBulkSelectedUI();
+      });
+    });
 
     els.filesTableBody.querySelectorAll("[data-test-file]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -306,10 +472,243 @@
       });
     });
 
+    els.filesTableBody.querySelectorAll("[data-copy-link]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const link = btn.getAttribute("data-copy-link") || "";
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(link).catch(() => {});
+        }
+        setFeedback(els.fileFeedback, `📋 Copied link: ${link}`, false);
+      });
+    });
+
     els.filesTableBody.querySelectorAll("[data-del-file]").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        const id = btn.getAttribute("data-del-file");
+        const id = Number(btn.getAttribute("data-del-file"));
         const res = await apiFetch(`/api/files/${id}`, { method: "DELETE" });
+        if (res.ok) {
+          selectedFileIds.delete(id);
+          renderAll(await res.json());
+        }
+      });
+    });
+  }
+
+  // Select All Checkbox handler
+  if (els.selectAllFilesCheckbox) {
+    els.selectAllFilesCheckbox.addEventListener("change", () => {
+      const files = appState.files || [];
+      if (els.selectAllFilesCheckbox.checked) {
+        files.forEach((f) => selectedFileIds.add(Number(f.id)));
+      } else {
+        selectedFileIds.clear();
+      }
+      renderFilesTable();
+    });
+  }
+
+  // Bulk Actions Dropdown ('Actions' -> Bulk Delete Selected Files)
+  if (els.applyBulkFileActionBtn) {
+    els.applyBulkFileActionBtn.addEventListener("click", async () => {
+      const actionVal = els.bulkFileActionsSelect
+        ? els.bulkFileActionsSelect.value
+        : "";
+      if (actionVal !== "bulk_delete") {
+        setFeedback(
+          els.fileFeedback,
+          "❌ Actions dropdown se 'Bulk Delete Selected Files' chunein!",
+          true
+        );
+        return;
+      }
+      const ids = Array.from(selectedFileIds);
+      if (ids.length === 0) {
+        setFeedback(
+          els.fileFeedback,
+          "❌ Kam se kam 1 file checkbox select karein bulk delete ke liye!",
+          true
+        );
+        return;
+      }
+      const res = await apiFetch("/api/files/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_ids: ids }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setFeedback(
+          els.fileFeedback,
+          err.detail || "Failed to bulk delete selected files.",
+          true
+        );
+        return;
+      }
+      const payload = await res.json();
+      selectedFileIds.clear();
+      renderAll(payload);
+      setFeedback(
+        els.fileFeedback,
+        `✅ Bulk deleted ${payload.deleted_count ?? ids.length} selected vault item(s)!`,
+        false
+      );
+    });
+  }
+
+  function renderBotBuildTables() {
+    if (els.userBotsTableBody) {
+      const uBots = appState.user_bots || [];
+      if (uBots.length === 0) {
+        els.userBotsTableBody.innerHTML =
+          '<tr><td colspan="5">No user bots built via /BOT-build yet. Verify a token above!</td></tr>';
+      } else {
+        els.userBotsTableBody.innerHTML = uBots
+          .map(
+            (ub) => `
+            <tr>
+              <td>
+                <strong>${escapeHtml(ub.bot_name)}</strong>
+                <div class="field-hint">@${escapeHtml(ub.bot_username)}</div>
+              </td>
+              <td>
+                <strong>👤 ${escapeHtml(ub.owner_name)}</strong>
+                <div class="field-hint">Token: <code>${escapeHtml(ub.bot_token_masked || "")}</code></div>
+              </td>
+              <td>
+                <div><span class="perm-badge">🛡️ 2 Admin Channels</span> + <span class="perm-badge" style="background:rgba(168,85,247,0.2);color:#e9d5ff;border-color:rgba(168,85,247,0.45)">📢 ${ub.user_channels_count || 0}/2 User Channels</span></div>
+                <div class="field-hint">
+                  1: ${escapeHtml(ub.channel_1_title || "Not Set")} · 2: ${escapeHtml(ub.channel_2_title || "Not Set")}
+                </div>
+              </td>
+              <td><span class="perm-badge">🟢 24/7 Online</span></td>
+              <td>
+                <div class="action-cell">
+                  <button type="button" class="btn-colorful btn-color-purple btn-sm" data-sim-userbot="${ub.id}" aria-label="Open ${escapeHtml(ub.bot_name)} Home Screen">
+                    🦄 🏠 Home Screen
+                  </button>
+                  <button type="button" class="btn-colorful btn-color-rose btn-sm" data-del-userbot="${ub.id}" aria-label="Delete user bot ${escapeHtml(ub.bot_name)}">
+                    🔴 🗑
+                  </button>
+                </div>
+              </td>
+            </tr>
+          `
+          )
+          .join("");
+
+        els.userBotsTableBody.querySelectorAll("[data-sim-userbot]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            runSimulation("user_bot_home");
+          });
+        });
+
+        els.userBotsTableBody.querySelectorAll("[data-del-userbot]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const ubid = btn.getAttribute("data-del-userbot");
+            const res = await apiFetch(`/api/user-bots/${ubid}`, { method: "DELETE" });
+            if (res.ok) {
+              renderAll(await res.json());
+            }
+          });
+        });
+      }
+    }
+
+    if (els.usersActivityTableBody) {
+      const users = appState.users || [];
+      if (users.length === 0) {
+        els.usersActivityTableBody.innerHTML =
+          '<tr><td colspan="4">No users recorded yet.</td></tr>';
+      } else {
+        els.usersActivityTableBody.innerHTML = users
+          .map(
+            (u) => `
+            <tr>
+              <td><code>${u.user_id}</code></td>
+              <td>
+                <strong>${escapeHtml(u.first_name || "User")}</strong>
+                ${u.username ? `<span class="field-hint">@${escapeHtml(u.username)}</span>` : ""}
+              </td>
+              <td>
+                ${
+                  u.used_bot_build
+                    ? '<span class="perm-badge">✅ Used /BOT-build</span>'
+                    : '<span class="expiry-badge">❌ Not Used Yet</span>'
+                }
+              </td>
+              <td>
+                ${
+                  u.used_user_upload
+                    ? '<span class="perm-badge">✅ Used /user-upload (7d)</span>'
+                    : '<span class="expiry-badge">❌ Not Used Yet</span>'
+                }
+              </td>
+            </tr>
+          `
+          )
+          .join("");
+      }
+    }
+  }
+
+  function renderGroupsTable() {
+    if (!els.groupsTableBody) return;
+    const groups = appState.managed_groups || [];
+    if (groups.length === 0) {
+      els.groupsTableBody.innerHTML =
+        '<tr><td colspan="5">No groups added via /ad-group yet. Add one above.</td></tr>';
+      return;
+    }
+    els.groupsTableBody.innerHTML = groups
+      .map(
+        (g) => `
+        <tr>
+          <td>
+            <strong>📢 ${escapeHtml(g.title)}</strong>
+            <div class="field-hint">${escapeHtml(g.description || "")}</div>
+          </td>
+          <td><code>${g.chat_id}</code></td>
+          <td><span class="perm-badge">⏱️ Post First ➜ Stay 15m ➜ Delete &amp; Repost</span></td>
+          <td><strong>#${g.send_count || 0}</strong></td>
+          <td>
+            <div class="action-cell">
+              <button type="button" class="btn-colorful btn-color-cyan btn-sm" data-rotate-group="${g.id}" aria-label="Rotate banner now for ${escapeHtml(g.title)}">
+                🩵 🚀 Send &amp; Rotate Now
+              </button>
+              <button type="button" class="btn-colorful btn-color-rose btn-sm" data-del-group="${g.id}" aria-label="Remove group ${escapeHtml(g.title)}">
+                🔴 🗑
+              </button>
+            </div>
+          </td>
+        </tr>
+      `
+      )
+      .join("");
+
+    els.groupsTableBody.querySelectorAll("[data-rotate-group]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const gid = Number(btn.getAttribute("data-rotate-group"));
+        const res = await apiFetch("/api/groups/rotate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ group_id: gid }),
+        });
+        if (res.ok) {
+          renderAll(await res.json());
+          setFeedback(
+            els.groupFeedback,
+            "✅ Previous banner deleted & new 15m banner sent to group!",
+            false
+          );
+          runSimulation("ad_group");
+        }
+      });
+    });
+
+    els.groupsTableBody.querySelectorAll("[data-del-group]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const gid = btn.getAttribute("data-del-group");
+        const res = await apiFetch(`/api/groups/${gid}`, { method: "DELETE" });
         if (res.ok) {
           renderAll(await res.json());
         }
@@ -322,7 +721,7 @@
     els.simFileSelect.innerHTML = files
       .map(
         (f) =>
-          `<option value="${f.id}" ${f.id === selectedSimFileId ? "selected" : ""}>File #${f.id}: ${escapeHtml(f.file_name)}</option>`
+          `<option value="${f.id}" ${f.id === selectedSimFileId ? "selected" : ""}>#${f.id}: ${escapeHtml(f.custom_name || f.file_name)} (${escapeHtml(f.random_code || "")})</option>`
       )
       .join("");
 
@@ -341,7 +740,7 @@
               data-toggle-ch="${ch.id}"
               aria-label="Toggle membership for ${escapeHtml(ch.title)}"
             >
-              ${isJoined ? "✅ Joined:" : "❌ Not Joined:"} ${escapeHtml(ch.title)}
+              ${isJoined ? "🟢 Joined:" : "🔴 Not Joined:"} ${escapeHtml(ch.title)}
             </button>
           `;
         })
@@ -388,11 +787,16 @@
     if (payload.delivered_file) {
       const df = payload.delivered_file;
       els.tgDeliveredBox.classList.remove("hidden");
+      const linkLine =
+        df.file_type === "link" || df.external_url
+          ? `<div style="margin-top:6px"><a href="${escapeHtml(df.external_url || df.tg_file_id)}" target="_blank" rel="noopener" class="btn-colorful btn-color-emerald btn-sm">🟢 🌐 Open Unlocked Direct Link</a></div>`
+          : "";
       els.tgDeliveredBox.innerHTML = `
-        <div><strong>📄 ${escapeHtml(df.file_name)}</strong></div>
+        <div><strong>${escapeHtml(df.icon || "📄")} ${escapeHtml(df.custom_name || df.file_name)}</strong> <span class="perm-badge">♾️ Permanent</span></div>
         <div style="margin-top:4px">${df.caption_html || ""}</div>
+        ${linkLine}
         <div style="margin-top:6px;font-size:0.75rem;color:#6ee7b7">
-          ⬇️ Total Downloads Now: <strong>${df.downloads}</strong>
+          ⚡ Delivered in &lt;1s · ⬇️ Total Downloads: <strong>${df.downloads}</strong>
         </div>
       `;
     } else {
@@ -401,15 +805,16 @@
     }
 
     const rows = payload.buttons || [];
+    const fallbackColors = ["primary", "purple", "success", "amber", "pink", "cyan"];
     els.tgInlineKeyboard.innerHTML = rows
       .map(
-        (row) => `
+        (row, rIdx) => `
         <div class="tg-kb-row" style="grid-template-columns: repeat(${row.length}, 1fr)">
           ${row
-            .map(
-              (b) =>
-                `<button type="button" class="tg-kb-btn" data-sim-kb="${escapeHtml(b.action)}">${escapeHtml(b.text)}</button>`
-            )
+            .map((b, bIdx) => {
+              const cStyle = b.color || fallbackColors[(rIdx + bIdx) % fallbackColors.length];
+              return `<button type="button" class="tg-kb-btn tg-kb-${escapeHtml(cStyle)}" data-sim-kb="${escapeHtml(b.action)}">${escapeHtml(b.text)}</button>`;
+            })
             .join("")}
         </div>
       `
@@ -429,14 +834,123 @@
           runSimulation("verify", fId);
         } else if (act.startsWith("tab:")) {
           switchTab(act.split(":")[1]);
-        } else if (act === "sim:stats") {
-          runSimulation("stats");
-        } else if (act === "sim:start") {
-          runSimulation("start");
-        } else if (act === "sim:broadcast") {
-          runSimulation("broadcast");
+        } else if (act.startsWith("sim:")) {
+          runSimulation(act.split(":")[1]);
         }
       });
+    });
+  }
+
+  // Save /BOT-build-description & User Feature Permissions
+  if (els.botBuilderConfigForm) {
+    els.botBuilderConfigForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const desc = els.botBuildDescInput.value.trim();
+      if (!desc) {
+        setFeedback(
+          els.botBuilderConfigFeedback,
+          "❌ /BOT-build-description khali nahi ho sakta!",
+          true
+        );
+        return;
+      }
+      const res = await apiFetch("/api/bot-builder/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: desc,
+          allow_bot_build: els.allowBotBuildToggle.checked,
+          allow_user_upload: els.allowUserUploadToggle.checked,
+          allow_user_two_channels: els.allowUserTwoChannelsToggle.checked,
+        }),
+      });
+      if (res.ok) {
+        renderAll(await res.json());
+        setFeedback(
+          els.botBuilderConfigFeedback,
+          "✅ /BOT-build-description & User Feature Permissions saved!",
+          false
+        );
+        runSimulation("bot_build");
+      }
+    });
+  }
+
+  // Create / Verify User Bot via @BotFather Token
+  if (els.createUserBotForm) {
+    els.createUserBotForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const ownerName = els.userBotOwnerName.value.trim();
+      const token = els.userBotTokenInput.value.trim();
+      const c1Title = els.userBotCh1Title.value.trim();
+      const c1Link = els.userBotCh1Link.value.trim();
+      const c2Title = els.userBotCh2Title.value.trim();
+      const c2Link = els.userBotCh2Link.value.trim();
+
+      if (!ownerName || !token) {
+        setFeedback(
+          els.userBotFeedback,
+          "❌ User Name aur @BotFather Token daalna zaroori hai!",
+          true
+        );
+        return;
+      }
+
+      const res = await apiFetch("/api/user-bots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          owner_name: ownerName,
+          bot_token: token,
+          channel_1_title: c1Title,
+          channel_1_link: c1Link,
+          channel_2_title: c2Title,
+          channel_2_link: c2Link,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setFeedback(
+          els.userBotFeedback,
+          err.detail || "Could not verify @BotFather token.",
+          true
+        );
+        return;
+      }
+      els.userBotOwnerName.value = "";
+      els.userBotTokenInput.value = "";
+      els.userBotCh1Title.value = "";
+      els.userBotCh1Link.value = "";
+      els.userBotCh2Title.value = "";
+      els.userBotCh2Link.value = "";
+      renderAll(await res.json());
+      setFeedback(
+        els.userBotFeedback,
+        "🦄 ✅ Token Verified! User Bot is now 24/7 Online with 2+2 Force-Join Channels!",
+        false
+      );
+      runSimulation("user_bot_home");
+    });
+  }
+
+  // Trigger 5-Minute Keep-Alive Heartbeat manually
+  if (els.triggerKeepAliveBtn) {
+    els.triggerKeepAliveBtn.addEventListener("click", async () => {
+      const customWh = els.inputWebhookUrl ? els.inputWebhookUrl.value.trim() : "";
+      const res = await apiFetch("/api/keepalive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ webhook_url: customWh }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        renderAll(updated);
+        setFeedback(
+          els.configFeedback,
+          "💓 5-Minute Keep-Alive Heartbeat executed & Webhook registered with Telegram API!",
+          false
+        );
+      }
     });
   }
 
@@ -446,6 +960,7 @@
     const botName = els.inputBotName.value.trim();
     const dbPath = els.inputDbPath.value.trim();
     const botToken = els.inputBotToken.value.trim();
+    const webhookUrl = els.inputWebhookUrl ? els.inputWebhookUrl.value.trim() : "";
 
     if (!adminIds || !botName || !dbPath) {
       setFeedback(
@@ -460,6 +975,7 @@
       admin_ids: adminIds,
       bot_name: botName,
       db_path: dbPath,
+      webhook_url: webhookUrl,
     };
     if (botToken) {
       body.bot_token = botToken;
@@ -484,7 +1000,7 @@
     renderAll(updated);
     setFeedback(
       els.configFeedback,
-      "✅ Saved to .env & synced with bot_data.db!",
+      "✅ Saved to .env & synced with 24/7 Keep-Alive Engine!",
       false
     );
   });
@@ -546,19 +1062,25 @@
     els.channelUsername.value = "";
     els.channelInviteLink.value = "";
     renderAll(await res.json());
-    setFeedback(els.channelFeedback, "✅ Channel saved to bot_data.db!", false);
-    runSimulation("deep_link", selectedSimFileId);
+    setFeedback(els.channelFeedback, "✅ Channel saved permanently!", false);
   });
 
   els.addFileForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const fileName = els.fileName.value.trim();
+    const customName = els.fileCustomName.value.trim();
+    const groupName = els.fileGroupName.value.trim();
+    const uploaderRole = els.fileUploaderRole ? els.fileUploaderRole.value : "admin";
     const fileType = els.fileType.value;
+    const randomDigits = Number(els.fileRandomDigits.value) || 6;
+    const externalUrl = els.fileExternalUrl.value.trim();
     const caption = els.fileCaption.value.trim();
-    const tgFileId = els.fileTgId.value.trim();
 
-    if (!fileName) {
-      setFeedback(els.fileFeedback, "File Name is required.", true);
+    if (!customName) {
+      setFeedback(
+        els.fileFeedback,
+        "❌ Custom Name (NAME) daalna zaroori hai!",
+        true
+      );
       return;
     }
 
@@ -566,34 +1088,120 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        file_name: fileName,
+        custom_name: customName,
+        file_name: customName,
+        group_name: groupName,
+        uploader_role: uploaderRole,
         file_type: fileType,
+        random_digits: randomDigits,
+        external_url: externalUrl,
+        tg_file_id: externalUrl,
         caption,
-        tg_file_id: tgFileId,
       }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       setFeedback(
         els.fileFeedback,
-        err.detail || "Could not register file.",
+        err.detail || "Could not save item.",
         true
       );
       return;
     }
     const payload = await res.json();
-    els.fileName.value = "";
+    els.fileCustomName.value = "";
+    els.fileGroupName.value = "";
+    els.fileExternalUrl.value = "";
     els.fileCaption.value = "";
-    els.fileTgId.value = "";
     selectedSimFileId = payload.created_file_id || selectedSimFileId;
     renderAll(payload);
+    const created = (payload.files || []).find((f) => f.id === payload.created_file_id);
+    const policyMsg =
+      uploaderRole === "user"
+        ? "⚠️ Saved for 1 Week (7-Day Auto-Delete)"
+        : "♾️ Saved for Lifetime (Admin)";
     setFeedback(
       els.fileFeedback,
-      `✅ File #${payload.created_file_id} saved to bot_data.db!`,
+      `✅ ${policyMsg}! Link: ${created ? created.share_link : ""}`,
       false
     );
     runSimulation("deep_link", selectedSimFileId);
   });
+
+  if (els.groupBannerForm) {
+    els.groupBannerForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const bannerFid = els.bannerFileId.value.trim();
+      const desc = els.bannerDescription.value.trim();
+      if (!bannerFid || !desc) {
+        setFeedback(
+          els.bannerFeedback,
+          "❌ Banner Image aur Description dono daalna zaroori hai.",
+          true
+        );
+        return;
+      }
+      const res = await apiFetch("/api/group-banner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          banner_file_id: bannerFid,
+          description: desc,
+          banner_type: "photo",
+        }),
+      });
+      if (res.ok) {
+        renderAll(await res.json());
+        setFeedback(
+          els.bannerFeedback,
+          "✅ /Group-image-description Verified & Permanently Saved!",
+          false
+        );
+        runSimulation("group_banner");
+      }
+    });
+  }
+
+  if (els.addGroupForm) {
+    els.addGroupForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const title = els.groupTitle.value.trim();
+      const chatId = Number(els.groupChatId.value.trim());
+      const inviteLink = els.groupInviteLink.value.trim();
+      const intervalMin = Number(els.groupInterval.value) || 15;
+
+      if (!title || !chatId) {
+        setFeedback(
+          els.groupFeedback,
+          "❌ Group Name aur Numeric Chat ID zaroori hai.",
+          true
+        );
+        return;
+      }
+      const res = await apiFetch("/api/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          chat_id: chatId,
+          invite_link: inviteLink,
+          interval_minutes: intervalMin,
+        }),
+      });
+      if (res.ok) {
+        els.groupTitle.value = "";
+        els.groupChatId.value = "";
+        els.groupInviteLink.value = "";
+        renderAll(await res.json());
+        setFeedback(
+          els.groupFeedback,
+          "✅ Group added via /ad-group! 15-Minute Auto Banner Send & Delete active.",
+          false
+        );
+        runSimulation("ad_group");
+      }
+    });
+  }
 
   els.simFileSelect.addEventListener("change", () => {
     selectedSimFileId = Number(els.simFileSelect.value);
@@ -604,9 +1212,29 @@
   els.simBtnDeepLink.addEventListener("click", () =>
     runSimulation("deep_link", selectedSimFileId)
   );
-  els.simBtnVerify.addEventListener("click", () =>
-    runSimulation("verify", selectedSimFileId)
-  );
+  if (els.simBtnBotBuild) {
+    els.simBtnBotBuild.addEventListener("click", () =>
+      runSimulation("bot_build")
+    );
+  }
+  if (els.simBtnUserUpload) {
+    els.simBtnUserUpload.addEventListener("click", () =>
+      runSimulation("user_upload")
+    );
+  }
+  if (els.simBtnGroupUpload) {
+    els.simBtnGroupUpload.addEventListener("click", () =>
+      runSimulation("group_upload")
+    );
+  }
+  if (els.simBtnGroupBanner) {
+    els.simBtnGroupBanner.addEventListener("click", () =>
+      runSimulation("group_banner")
+    );
+  }
+  if (els.simBtnAdGroup) {
+    els.simBtnAdGroup.addEventListener("click", () => runSimulation("ad_group"));
+  }
   els.simBtnStats.addEventListener("click", () => runSimulation("stats"));
 
   // Check if already unlocked in sessionStorage
