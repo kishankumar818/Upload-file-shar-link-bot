@@ -100,8 +100,14 @@
       "allow_bot_build": 1,
       "allow_user_upload": 1,
       "allow_user_two_channels": 1,
+      "allow_pro_plan": 1,
+      "pro_plan_secret_key": "FILE-SHARE-YU6J-IEHU-828H",
+      "show_start_help": 1,
+      "start_welcome_text": "⚡ 24/7 Ultra-Fast Instant Delivery, VIP Bot Builder & Lifetime Pro Vault!",
       "user_file_expiry_days": 7,
-      "updated_at": "2026-11-03T13:20:21.969241+00:00"
+      "updated_at": "2026-11-03T17:08:51.554826+00:00",
+      "pro_key_used_by": 0,
+      "pro_key_used_at": ""
     }
   ],
   "user_bots": [
@@ -117,7 +123,11 @@
       "channel_2_title": "Rahul Movies Channel #2",
       "channel_2_link": "https://t.me/RahulMoviesChannel2",
       "status": "online_24_7",
-      "created_at": "2026-11-03T13:20:21.969702+00:00"
+      "created_at": "2026-11-03T16:48:07.606581+00:00",
+      "channel_3_title": "",
+      "channel_3_link": "",
+      "channel_4_title": "",
+      "channel_4_link": ""
     }
   ]
 }

@@ -85,23 +85,40 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
 
     if action == "start":
         s = bot_core.get_stats()
+        bcfg = bot_core.get_bot_builder_config()
         user_bots = bot_core.get_user_bots()
         first_ub = user_bots[0] if user_bots else None
-        if is_adm:
+        has_pro = bot_core.is_user_pro(user_id)
+        if is_adm and not payload.get("force_user_view"):
+            used_by = int(bcfg.get("pro_key_used_by") or 0)
+            link_badge = "🟢 Ready (Single-Use)" if used_by == 0 else f"🔴 Used by {used_by}"
             msg_html = bot_core.card(
                 "⚡",
                 f"VIP Control Panel • {bot_core.BOT_NAME}",
                 f"👑 <b>Admin:</b> {bot_core.esc(first_name)} (Lifetime Storage Forever)",
                 "🟢 <b>Status:</b> 24/7 Live · Instant &lt;1s Fast Response",
-                "💓 <b>Keep-Alive:</b> 5-Min Telegram Webhook Heartbeat Active",
-                f"🦄 <b>/BOT-build Cloned Bots:</b> {s.get('user_bots', 0)} Online (2+2 Channels)",
-                f"📂 <b>Admin Lifetime Vault:</b> {s['files']}   |   ⏳ <b>User 7d Uploads:</b> {s.get('user_uploads', 0)}",
+                f"🦄 <b>/BOT-build Cloned Bots:</b> {s.get('user_bots', 0)} Online (Free: 2+2 · Pro: 4 Own Channels)",
+                f"💎 <b>Pro Users:</b> {s.get('pro_users', 0)}   |   🔗 <b>Pro Link:</b> {link_badge}",
+                f"🛒 <b>Store Bot:</b> @{bot_core.PRO_STORE_BOT_USERNAME}",
+                f"📂 <b>Permanent Vault:</b> {s['files']}   |   ⏳ <b>User 7d Uploads:</b> {s.get('user_uploads', 0)}",
                 f"👥 <b>15m Ad Groups:</b> {s['groups']}   |   📢 <b>Channels:</b> {s['channels']}",
                 "",
                 "◈ Neeche ke <b>Real Colorful Buttons</b> chunein 👇",
                 footer=bot_core.BOT_NAME,
             )
             buttons = [
+                [
+                    {
+                        "text": "🎛️ ⚙️ Customize /start & Pro Link",
+                        "action": "tab:botbuild",
+                        "color": "gold",
+                    },
+                    {
+                        "text": "💎 🔑 /Pro-plan Preview",
+                        "action": "sim:pro_plan",
+                        "color": "gold",
+                    },
+                ],
                 [
                     {
                         "text": "🟢 📤 Upload File / Link (Lifetime)",
@@ -140,7 +157,7 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
                 ],
                 [
                     {
-                        "text": "🟠 📤 /user-upload (7-Day User)",
+                        "text": "🟠 📤 /user-upload",
                         "action": "sim:user_upload",
                         "color": "amber",
                     },
@@ -152,6 +169,11 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
                 ],
                 [
                     {
+                        "text": "🦄 🔗 Test Pro Link Click (Activate VIP)",
+                        "action": "sim:pro_link_activate",
+                        "color": "gold",
+                    },
+                    {
                         "text": "💎 📊 Live Fast Stats",
                         "action": "sim:stats",
                         "color": "primary",
@@ -159,29 +181,123 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
                 ],
             ]
         else:
+            feature_bullets = []
+            buttons = []
+            if bcfg.get("allow_bot_build", True):
+                ch_rule = (
+                    "4 Aapke Channels (Admin Channels Removed!)"
+                    if has_pro
+                    else "2 Admin + 2 Aapke Channels"
+                )
+                feature_bullets.append(
+                    f"• <code>/BOT-build</code> — 🦄 Apna khud ka 24/7 Bot banayein ({ch_rule})."
+                )
+                buttons.append(
+                    [
+                        {
+                            "text": "🦄 🤖 /BOT-build (Create Your 24/7 Bot)",
+                            "action": "sim:bot_build",
+                            "color": "purple",
+                        }
+                    ]
+                )
+                if first_ub and bcfg.get("allow_user_two_channels", True):
+                    max_c = 4 if has_pro else 2
+                    buttons.append(
+                        [
+                            {
+                                "text": f"🟣 🏠 {first_ub['bot_name']} (Home)",
+                                "action": "sim:user_bot_home",
+                                "color": "purple",
+                            },
+                            {
+                                "text": f"🟠 ➕ Add {max_c} Channels",
+                                "action": "tab:botbuild",
+                                "color": "amber",
+                            },
+                        ]
+                    )
+            if bcfg.get("allow_user_upload", True):
+                if has_pro:
+                    feature_bullets.append(
+                        "• <code>/user-upload</code> — 👑 <b>VIP Pro Active:</b> Unlimited Lifetime Permanent File &amp; Link Upload!"
+                    )
+                    buttons.append(
+                        [
+                            {
+                                "text": "🟢 📤 /user-upload (♾️ Lifetime Unlimited)",
+                                "action": "sim:user_upload",
+                                "color": "success",
+                            }
+                        ]
+                    )
+                else:
+                    days = bcfg.get("user_file_expiry_days", 7)
+                    feature_bullets.append(
+                        f"• <code>/user-upload</code> — 📤 Apna File/Link upload karein (⚠️ Free user: {days} Days auto-delete)."
+                    )
+                    buttons.append(
+                        [
+                            {
+                                "text": f"🟢 📤 /user-upload ({days}-Day Validity)",
+                                "action": "sim:user_upload",
+                                "color": "success",
+                            }
+                        ]
+                    )
+            if bcfg.get("allow_pro_plan", True):
+                if has_pro:
+                    feature_bullets.append(
+                        "• <code>/Pro-plan</code> — 👑 <b>YOUR PRO PLAN ACTIVE!</b> (Lifetime Upload + 4 Channels Unlocked)."
+                    )
+                    buttons.append(
+                        [
+                            {
+                                "text": "👑 💎 /Pro-plan Status (Active • 4 Channels)",
+                                "action": "sim:pro_plan",
+                                "color": "gold",
+                            }
+                        ]
+                    )
+                else:
+                    feature_bullets.append(
+                        f"• <code>/Pro-plan</code> — 🔑 Secret Key daal kar <b>Lifetime Upload + 4 Channels</b> unlock karein (Buy Key: @{bot_core.PRO_STORE_BOT_USERNAME})!"
+                    )
+                    buttons.append(
+                        [
+                            {
+                                "text": "💎 🔑 /Pro-plan (Unlock Lifetime + 4 Channels)",
+                                "action": "sim:pro_plan",
+                                "color": "gold",
+                            }
+                        ]
+                    )
+                    buttons.append(
+                        [
+                            {
+                                "text": f"🛒 💎 Buy Pro Key (@{bot_core.PRO_STORE_BOT_USERNAME})",
+                                "action": "url:https://t.me/Krishna_Zx_Store_bot",
+                                "color": "amber",
+                            }
+                        ]
+                    )
+            plan_badge = (
+                "👑 <b>Plan Status:</b> YOUR PRO PLAN ACTIVE (♾️ Lifetime Upload + 4 Own Channels)"
+                if has_pro
+                else f"⏳ <b>Plan Status:</b> Free Plan (7-Day Upload · 2+2 Channels · Buy Pro: @{bot_core.PRO_STORE_BOT_USERNAME})"
+            )
+            welcome_line = bcfg.get("start_welcome_text") or bot_core.DEFAULT_START_WELCOME_TEXT
             msg_html = bot_core.card(
-                "🎁",
+                "🦄",
                 f"Welcome to {bot_core.BOT_NAME}",
-                f"👤 <b>{bot_core.esc(first_name)}</b>",
-                "⚡ <b>24/7 Ultra-Fast Instant Delivery Bot</b>",
-                "🦄 <b>/BOT-build:</b> Apna khud ka 24/7 Bot banayein!",
-                "📤 <b>/user-upload:</b> File upload karein (⚠️ 1 Hafta / 7 Days me auto-delete ho jayega)",
+                f"👤 <b>Hello {bot_core.esc(first_name)}!</b>",
+                f"✨ <b>{bot_core.esc(welcome_line)}</b>",
+                plan_badge,
+                "",
+                "🌈 <b>Available Features on /start (Configured by Admin):</b>",
+                *(feature_bullets or ["• ⚡ Share links par click karke instant files unlock karein!"]),
                 footer=bot_core.BOT_NAME,
             )
-            buttons = [
-                [
-                    {
-                        "text": "🦄 🤖 /BOT-build (Create Your Own Bot)",
-                        "action": "sim:bot_build",
-                        "color": "purple",
-                    },
-                    {
-                        "text": "🟢 📤 /user-upload (1-Week Cloud)",
-                        "action": "sim:user_upload",
-                        "color": "success",
-                    },
-                ]
-            ]
         return {
             "message_html": msg_html,
             "buttons": buttons,
@@ -570,29 +686,42 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
         user_bots = bot_core.get_user_bots()
         ub = user_bots[0] if user_bots else {
             "id": 1,
+            "owner_user_id": user_id,
             "bot_name": "🦄 Rahul VIP File Bot",
             "bot_username": "RahulVIPFile_bot",
             "channel_1_title": "Rahul Main Channel",
             "channel_1_link": "https://t.me/RahulMainChannel",
             "channel_2_title": "Rahul Backup Channel",
             "channel_2_link": "https://t.me/RahulBackupChannel",
+            "channel_3_title": "",
+            "channel_3_link": "",
+            "channel_4_title": "",
+            "channel_4_link": "",
         }
-        c1 = ub.get("channel_1_title") or "Not Set"
-        c2 = ub.get("channel_2_title") or "Not Set"
+        has_pro = bot_core.is_user_pro(user_id) or bool(ub.get("owner_is_pro"))
+        combined = bot_core.get_combined_force_channels_for_user_bot(int(ub.get("id") or 1))
+        ch_lines = [
+            f"  • 📢 <b>{bot_core.esc(c['slot'])}:</b> {bot_core.esc(c['title'])}"
+            for c in combined
+        ]
+        rule_title = (
+            "📢 <b>Force-Join Rule (👑 Pro Mode: 0 Admin + 4 Your Channels):</b>"
+            if has_pro
+            else "📢 <b>Force-Join Rule (2 Admin + 2 User Channels):</b>"
+        )
         msg_html = bot_core.card(
             "🦄",
             f"Home Screen • {ub.get('bot_name')}",
             f"🤖 <b>Bot Username:</b> @{bot_core.esc(ub.get('bot_username'))}",
             "🟢 <b>Status:</b> 24/7 Online &amp; Active (&lt;1s Fast Start)",
+            f"👑 <b>Owner Plan:</b> {'YOUR PRO PLAN ACTIVE (Admin Channels Removed!)' if has_pro else 'Free Plan (2 Admin + 2 User Channels)'}",
             "",
-            "📢 <b>Force-Join Rule (2 Admin + 2 User Channels):</b>",
-            "  • 🛡️ <b>2 Official Admin Channels:</b> Mandatory on /start",
-            f"  • 📢 <b>User Channel 1:</b> {bot_core.esc(c1)}",
-            f"  • 📢 <b>User Channel 2:</b> {bot_core.esc(c2)}",
+            rule_title,
+            *ch_lines,
             "",
-            "⚠️ <b>Allowed User Features Only:</b>",
-            "  • ➕ <b>Add Channel (Max 2 Channels)</b>",
-            "  • 📤 <b>/user-upload</b> (⚠️ 1 Hafta / 7 Days Auto-Delete)",
+            "✨ <b>Allowed User Features:</b>",
+            f"  • ➕ <b>{'Add 4 Own Channels (Admin 2 Removed!)' if has_pro else 'Add Channel (Max 2 Channels)'}</b>",
+            "  • 📤 <b>/user-upload</b> (Free: 7 Days · 💎 /Pro-plan: Lifetime)",
             footer=ub.get("bot_name") or bot_core.BOT_NAME,
         )
         return {
@@ -600,22 +729,27 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
             "buttons": [
                 [
                     {
-                        "text": "🟠 ➕ Add Channel (Max 2 Channels)",
+                        "text": "🟣 ➕ Add 4 Channels (Pro Unlocked)" if has_pro else "🟠 ➕ Add Channel (Max 2)",
                         "action": "tab:botbuild",
-                        "color": "amber",
+                        "color": "purple" if has_pro else "amber",
                     },
                     {
-                        "text": "🟢 📤 /user-upload (7-Day Expiry)",
+                        "text": "🟢 📤 /user-upload",
                         "action": "sim:user_upload",
                         "color": "success",
                     },
                 ],
                 [
                     {
+                        "text": "👑 💎 /Pro-plan Active (VIP)" if has_pro else "💎 🔑 /Pro-plan (Unlock 4 Channels + Lifetime)",
+                        "action": "sim:pro_plan",
+                        "color": "gold",
+                    },
+                    {
                         "text": "🔵 🛠 Back to Main Bot",
                         "action": "sim:start",
                         "color": "primary",
-                    }
+                    },
                 ],
             ],
             "delivered_file": None,
@@ -623,15 +757,109 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     if action == "user_upload":
+        has_pro = bot_core.is_user_pro(user_id)
+        if has_pro:
+            msg_html = bot_core.card(
+                "👑",
+                "/user-upload • VIP Pro Lifetime Unlimited Vault",
+                "🦄✨💎 <b>YOUR PRO PLAN ACTIVE!</b> 💎✨🦄",
+                "",
+                "♾️ <b>Lifetime Permanent Storage:</b>",
+                "<blockquote>Aapki upload ki gayi har File, Image, Video ya Direct Link <b>LIFETIME</b> ke liye permanent save rahegi — kabhi auto-delete nahi hogi!</blockquote>",
+                "",
+                "📢 <b>Pro 4-Channel Force-Join:</b> Aapke bot par Admin ke 2 Channels hata diye gaye hain — sirf aapke <b>4 Force-Join Channels</b> dikhenge!",
+                footer=bot_core.BOT_NAME,
+            )
+        else:
+            msg_html = bot_core.card(
+                "📤",
+                "/user-upload • User 1-Week Cloud Upload",
+                "🦄 <b>User Exclusive Upload Feature</b>",
+                "",
+                "⚠️ <b>CHETAVANI (7-Day Auto-Delete Warning):</b>",
+                "<blockquote>Aapki upload ki gayi file ya link sirf <b>1 Hafta (7 Days)</b> tak save rahegi! 7 din poore hote hi yeh automatically delete ho jayegi. (Unlimited Lifetime Upload + 4 Channels ke liye <code>/Pro-plan</code> unlock karein).</blockquote>",
+                "",
+                "📢 <b>Start Verification:</b> Jab koi user aapke link par Start dabayega, use <b>2 Hamare (Admin) Channels + 2 Aapke Channels</b> join karne honge!",
+                footer=bot_core.BOT_NAME,
+            )
+        return {
+            "message_html": msg_html,
+            "buttons": [
+                [
+                    {
+                        "text": "🟢 📤 Upload File in Vault Tab",
+                        "action": "tab:files",
+                        "color": "success",
+                    },
+                    {
+                        "text": "💎 🔑 /Pro-plan (Lifetime + 4 Channels)",
+                        "action": "sim:pro_plan",
+                        "color": "gold",
+                    },
+                ],
+                [
+                    {
+                        "text": "🦄 🏠 Open User Bot Home",
+                        "action": "sim:user_bot_home",
+                        "color": "purple",
+                    },
+                    {
+                        "text": "🔵 🛠 Back to VIP Panel",
+                        "action": "sim:start",
+                        "color": "primary",
+                    },
+                ],
+            ],
+            "delivered_file": None,
+            "state": build_full_state(),
+        }
+
+    if action == "pro_plan":
+        has_pro = bot_core.is_user_pro(user_id)
+        if has_pro and not is_adm:
+            msg_html, _ = bot_core.build_pro_plan_activated_card_and_kb(user_id)
+            return {
+                "message_html": msg_html,
+                "banner_url": bot_core.DEFAULT_PRO_BANNER_URL,
+                "buttons": [
+                    [
+                        {
+                            "text": "🟣 ➕ Add 4 Own Channels (Admin Removed!)",
+                            "action": "tab:botbuild",
+                            "color": "purple",
+                        },
+                        {
+                            "text": "🟢 📤 /user-upload (♾️ Lifetime)",
+                            "action": "sim:user_upload",
+                            "color": "success",
+                        },
+                    ],
+                    [
+                        {
+                            "text": "🔵 🏠 Back to /start",
+                            "action": "sim:start",
+                            "color": "primary",
+                        }
+                    ],
+                ],
+                "delivered_file": None,
+                "state": build_full_state(),
+            }
+
+        bcfg = bot_core.get_bot_builder_config()
+        pro_link = bcfg.get("pro_activation_link") or bot_core.get_pro_plan_activation_link()
         msg_html = bot_core.card(
-            "📤",
-            "/user-upload • User 1-Week Cloud Upload",
-            "🦄 <b>User Exclusive Upload Feature</b>",
+            "🦄",
+            "/Pro-plan • Unlock VIP Lifetime + 4 Channels!",
+            "✨ <b>Kya aap Lifetime Unlimited Upload + Apne Bot me 4 Force-Join Channels unlock karna chahte hain?</b>",
             "",
-            "⚠️ <b>CHETAVANI (7-Day Auto-Delete Warning):</b>",
-            "<blockquote>Aapki upload ki gayi file ya link sirf <b>1 Hafta (7 Days)</b> tak save rahegi! 7 din poore hote hi yeh automatically delete ho jayegi. (Sirf Admin ki files Lifetime rehti hain).</blockquote>",
+            "🔥 <b>/Pro-plan VIP Benefits:</b>",
+            "• ♾️ <b>Lifetime Permanent Vault:</b> Aapki files kabhi delete nahi hongi!",
+            "• 📢 <b>4 Own Force-Join Channels:</b> Admin ke 2 Channels hat jayenge aur aap apne <b>4 Force-Join Channels</b> jod payenge!",
+            "• 🚀 <b>Unlimited Uploads &amp; &lt;1s Instant Delivery</b>",
+            f"• 🛒 <b>Buy Secret Key / Link:</b> @{bot_core.PRO_STORE_BOT_USERNAME}",
             "",
-            "📢 <b>Start Verification:</b> Jab koi user aapke link par Start dabayega, use <b>2 Hamare (Admin) Channels + 2 Aapke Channels</b> join karne honge!",
+            "🔑 <b>Activate karne ke liye Secret Key daalein ya One-Click Activation Link par click karein:</b>",
             footer=bot_core.BOT_NAME,
         )
         return {
@@ -639,22 +867,100 @@ def handle_simulate(payload: dict[str, Any]) -> dict[str, Any]:
             "buttons": [
                 [
                     {
-                        "text": "🟢 📤 Upload 7-Day User File in Vault Tab",
-                        "action": "tab:files",
-                        "color": "success",
+                        "text": "🦄 🔗 Click Pro Activation Link (Instant VIP)",
+                        "action": "sim:pro_link_activate",
+                        "color": "gold",
+                    }
+                ],
+                [
+                    {
+                        "text": f"🛒 💎 Buy Pro Key (@{bot_core.PRO_STORE_BOT_USERNAME})",
+                        "action": f"url:{bot_core.PRO_STORE_BOT_URL}",
+                        "color": "amber",
                     },
                     {
-                        "text": "🦄 🏠 Open User Bot Home",
-                        "action": "sim:user_bot_home",
+                        "text": "🔵 🛠 Back to /start",
+                        "action": "sim:start",
+                        "color": "primary",
+                    },
+                ],
+            ],
+            "delivered_file": None,
+            "state": build_full_state(),
+        }
+
+    if action == "pro_link_activate":
+        bcfg = bot_core.get_bot_builder_config()
+        entered_key = str(
+            payload.get("secret_key")
+            or bcfg.get("pro_plan_secret_key")
+            or bot_core.DEFAULT_PRO_PLAN_SECRET_KEY
+        ).strip()
+        target_uid = int(payload.get("target_user_id") or 987654321)
+        ok, feedback = bot_core.activate_user_pro_plan(
+            user_id=target_uid,
+            entered_key=entered_key,
+            first_name=first_name,
+            username=first_name.lower().replace(" ", "_"),
+        )
+        if not ok:
+            msg_html = bot_core.card(
+                "⚠️",
+                "Single-Use Pro Link Already Claimed!",
+                feedback,
+                "",
+                f"🛒 <b>Buy New Key:</b> @{bot_core.PRO_STORE_BOT_USERNAME}",
+                "👑 <b>Admin Tip:</b> Bot Builder tab se 'Reset Single-Use Link' ya 'Generate New Key' dabayein!",
+                footer=bot_core.BOT_NAME,
+            )
+            return {
+                "message_html": msg_html,
+                "buttons": [
+                    [
+                        {
+                            "text": "🎛️ 🔄 Reset / Generate Key in Admin Tab",
+                            "action": "tab:botbuild",
+                            "color": "gold",
+                        },
+                        {
+                            "text": "🔵 🏠 Back to /start",
+                            "action": "sim:start",
+                            "color": "primary",
+                        },
+                    ]
+                ],
+                "delivered_file": None,
+                "state": build_full_state(),
+            }
+
+        msg_html, _ = bot_core.build_pro_plan_activated_card_and_kb(target_uid)
+        return {
+            "message_html": msg_html,
+            "banner_url": bot_core.DEFAULT_PRO_BANNER_URL,
+            "buttons": [
+                [
+                    {
+                        "text": "🟣 ➕ Add 4 Own Channels (Admin 2 Removed!)",
+                        "action": "tab:botbuild",
                         "color": "purple",
+                    },
+                    {
+                        "text": "🟢 📤 /user-upload (♾️ Lifetime)",
+                        "action": "sim:user_upload",
+                        "color": "success",
                     },
                 ],
                 [
                     {
-                        "text": "🔵 🛠 Back to VIP Panel",
+                        "text": "🦄 🏠 Open My Pro Bot Home",
+                        "action": "sim:user_bot_home",
+                        "color": "gold",
+                    },
+                    {
+                        "text": "🔵 🏠 Back to /start",
                         "action": "sim:start",
                         "color": "primary",
-                    }
+                    },
                 ],
             ],
             "delivered_file": None,
@@ -971,6 +1277,11 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
             allow_build = body.get("allow_bot_build")
             allow_upload = body.get("allow_user_upload")
             allow_two_ch = body.get("allow_user_two_channels")
+            allow_pro = body.get("allow_pro_plan")
+            show_help = body.get("show_start_help")
+            welcome_text = body.get("start_welcome_text")
+            secret_key = body.get("pro_plan_secret_key")
+            reset_single_use = bool(body.get("reset_single_use"))
             expiry_days = body.get("user_file_expiry_days")
             bot_core.save_bot_builder_config(
                 description=str(desc) if desc is not None else None,
@@ -978,7 +1289,51 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
                 allow_user_upload=bool(allow_upload) if allow_upload is not None else None,
                 allow_user_two_channels=bool(allow_two_ch) if allow_two_ch is not None else None,
                 user_file_expiry_days=int(expiry_days) if expiry_days is not None else None,
+                allow_pro_plan=bool(allow_pro) if allow_pro is not None else None,
+                pro_plan_secret_key=str(secret_key) if secret_key is not None else None,
+                show_start_help=bool(show_help) if show_help is not None else None,
+                start_welcome_text=str(welcome_text) if welcome_text is not None else None,
+                reset_single_use=reset_single_use,
             )
+            self._send_json(build_full_state())
+            return
+
+        if path == "/api/pro-plan/generate-key":
+            cfg = bot_core.generate_new_pro_plan_key()
+            state = build_full_state()
+            state["generated_key"] = cfg.get("pro_plan_secret_key")
+            state["pro_activation_link"] = cfg.get("pro_activation_link")
+            self._send_json(state)
+            return
+
+        if path == "/api/pro-plan/reset-link":
+            bot_core.reset_pro_plan_single_use_link()
+            self._send_json(build_full_state())
+            return
+
+        if path == "/api/pro-plan/activate":
+            uid = int(body.get("user_id") or 987654321)
+            entered_key = str(body.get("secret_key") or "").strip()
+            fname = str(body.get("first_name") or "VIP User").strip()
+            ok, feedback = bot_core.activate_user_pro_plan(
+                user_id=uid, entered_key=entered_key, first_name=fname
+            )
+            if not ok:
+                self._send_json({"detail": feedback, "activated": False}, status=400)
+                return
+            state = build_full_state()
+            state["activated"] = True
+            state["message"] = feedback
+            self._send_json(state)
+            return
+
+        if path == "/api/users/pro":
+            uid = int(body.get("user_id") or 0)
+            is_pro_flag = bool(body.get("is_pro", True))
+            if not uid:
+                self._send_json({"detail": "Valid user_id required"}, status=400)
+                return
+            bot_core.set_user_pro_status(uid, is_pro_flag)
             self._send_json(build_full_state())
             return
 
@@ -992,6 +1347,10 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
             c1_link = str(body.get("channel_1_link") or "").strip()
             c2_title = str(body.get("channel_2_title") or "").strip()
             c2_link = str(body.get("channel_2_link") or "").strip()
+            c3_title = str(body.get("channel_3_title") or "").strip()
+            c3_link = str(body.get("channel_3_link") or "").strip()
+            c4_title = str(body.get("channel_4_title") or "").strip()
+            c4_link = str(body.get("channel_4_link") or "").strip()
 
             if not bot_core.validate_bot_token(bot_token):
                 self._send_json(
@@ -1012,6 +1371,10 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
                 channel_1_link=c1_link,
                 channel_2_title=c2_title,
                 channel_2_link=c2_link,
+                channel_3_title=c3_title,
+                channel_3_link=c3_link,
+                channel_4_title=c4_title,
+                channel_4_link=c4_link,
             )
             state = build_full_state()
             state["created_user_bot_id"] = ub_id
@@ -1024,12 +1387,20 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
             c1_link = str(body.get("channel_1_link") or "").strip()
             c2_title = str(body.get("channel_2_title") or "").strip()
             c2_link = str(body.get("channel_2_link") or "").strip()
+            c3_title = body.get("channel_3_title")
+            c3_link = body.get("channel_3_link")
+            c4_title = body.get("channel_4_title")
+            c4_link = body.get("channel_4_link")
             updated = bot_core.update_user_bot_channels(
                 bot_db_id=bot_id,
                 channel_1_title=c1_title,
                 channel_1_link=c1_link,
                 channel_2_title=c2_title,
                 channel_2_link=c2_link,
+                channel_3_title=str(c3_title).strip() if c3_title is not None else None,
+                channel_3_link=str(c3_link).strip() if c3_link is not None else None,
+                channel_4_title=str(c4_title).strip() if c4_title is not None else None,
+                channel_4_link=str(c4_link).strip() if c4_link is not None else None,
             )
             if not updated:
                 self._send_json({"detail": "User bot not found"}, status=404)
@@ -1176,14 +1547,15 @@ class VaultRequestHandler(BaseHTTPRequestHandler):
 
 
 def create_control_center_server(
-    port: int = 3000, acquire_lock: bool = False
+    port: int = 3000, acquire_lock: bool = False, start_bot_thread: bool = True
 ) -> VaultHTTPServer:
     bot_core.init_db()
     bot_core.seed_demo_data_if_empty()
     if acquire_lock:
         bot_core.acquire_single_instance_lock()
     bot_core.start_keep_alive_daemon(port=port)
-    bot_core.ensure_bot_background_thread()
+    if start_bot_thread:
+        bot_core.ensure_bot_background_thread()
     server = VaultHTTPServer(("0.0.0.0", port), VaultRequestHandler)
     bot_core.logger.info(
         "🌐 Premium File Vault Control Center (24/7 Fast + 5m Keep-Alive) listening on http://0.0.0.0:%d",

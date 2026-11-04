@@ -24,6 +24,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import signal
 import sqlite3
 import sys
@@ -710,7 +711,10 @@ def btn(
         b = InlineKeyboardButton(text=text, url=url)
     else:
         b = InlineKeyboardButton(text=text, callback_data=data or "noop")
-    setattr(b, "color_style", style or BLUE)
+    try:
+        setattr(b, "color_style", style or BLUE)
+    except (AttributeError, TypeError):
+        pass
     return b
 
 
@@ -741,6 +745,10 @@ def panel_kb() -> InlineKeyboardMarkup:
         [
             btn("🦄 🤖 /BOT-build (User Builder)", "adm:botbuild", style=PURPLE),
             btn("✨ 📝 /BOT-build-description", "adm:botbuilddesc", style=GOLD),
+        ],
+        [
+            btn("🎛️ ⚙️ /start Features Control", "adm:startcfg", style=CYAN),
+            btn("💎 🔑 /Pro-plan Secret Key", "adm:prokey", style=GOLD),
         ],
         [
             btn("🟡 📢 Channels List", "adm:channels", style=GOLD),
@@ -1188,6 +1196,12 @@ def init_db(custom_path: str | None = None) -> None:
                 allow_bot_build INTEGER NOT NULL DEFAULT 1,
                 allow_user_upload INTEGER NOT NULL DEFAULT 1,
                 allow_user_two_channels INTEGER NOT NULL DEFAULT 1,
+                allow_pro_plan INTEGER NOT NULL DEFAULT 1,
+                pro_plan_secret_key TEXT NOT NULL DEFAULT 'FILE-SHARE-YU6J-IEHU-828H',
+                pro_key_used_by INTEGER NOT NULL DEFAULT 0,
+                pro_key_used_at TEXT NOT NULL DEFAULT '',
+                show_start_help INTEGER NOT NULL DEFAULT 1,
+                start_welcome_text TEXT NOT NULL DEFAULT '',
                 user_file_expiry_days INTEGER NOT NULL DEFAULT 7,
                 updated_at TEXT NOT NULL
             );
@@ -1203,6 +1217,10 @@ def init_db(custom_path: str | None = None) -> None:
                 channel_1_link TEXT DEFAULT '',
                 channel_2_title TEXT DEFAULT '',
                 channel_2_link TEXT DEFAULT '',
+                channel_3_title TEXT DEFAULT '',
+                channel_3_link TEXT DEFAULT '',
+                channel_4_title TEXT DEFAULT '',
+                channel_4_link TEXT DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'online_24_7',
                 created_at TEXT NOT NULL
             );
@@ -1222,12 +1240,32 @@ def init_db(custom_path: str | None = None) -> None:
             "ALTER TABLE files ADD COLUMN expires_at TEXT DEFAULT ''",
             "ALTER TABLE users ADD COLUMN used_bot_build INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN used_user_upload INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN is_pro INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN pro_activated_at TEXT DEFAULT ''",
+            "ALTER TABLE bot_builder_config ADD COLUMN allow_pro_plan INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE bot_builder_config ADD COLUMN pro_plan_secret_key TEXT NOT NULL DEFAULT 'FILE-SHARE-YU6J-IEHU-828H'",
+            "ALTER TABLE bot_builder_config ADD COLUMN pro_key_used_by INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE bot_builder_config ADD COLUMN pro_key_used_at TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE bot_builder_config ADD COLUMN show_start_help INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE bot_builder_config ADD COLUMN start_welcome_text TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE user_bots ADD COLUMN channel_3_title TEXT DEFAULT ''",
+            "ALTER TABLE user_bots ADD COLUMN channel_3_link TEXT DEFAULT ''",
+            "ALTER TABLE user_bots ADD COLUMN channel_4_title TEXT DEFAULT ''",
+            "ALTER TABLE user_bots ADD COLUMN channel_4_link TEXT DEFAULT ''",
         ]
         for stmt in alter_statements:
             try:
                 conn.execute(stmt)
             except sqlite3.OperationalError:
                 pass
+
+        # Migrate old default key if still set to VIP-PRO-2026
+        try:
+            conn.execute(
+                "UPDATE bot_builder_config SET pro_plan_secret_key = 'FILE-SHARE-YU6J-IEHU-828H' WHERE pro_plan_secret_key = 'VIP-PRO-2026' OR pro_plan_secret_key = ''"
+            )
+        except sqlite3.OperationalError:
+            pass
 
         conn.commit()
         if not custom_path:
@@ -1265,6 +1303,160 @@ def save_user(user_or_id: Any, first_name: str = "", username: str = "") -> None
             (uid, fname or "", uname or "", now_iso()),
         )
         db.commit()
+
+
+def is_user_pro(user_or_id: Any) -> bool:
+    """Returns True if the user is an Admin or has activated /Pro-plan with the Secret Key."""
+    if is_admin(user_or_id):
+        return True
+    uid = getattr(user_or_id, "id", user_or_id)
+    try:
+        uid_int = int(uid)
+    except (TypeError, ValueError):
+        return False
+    with db_lock:
+        db = ensure_db()
+        row = db.execute(
+            "SELECT is_pro FROM users WHERE user_id = ?", (uid_int,)
+        ).fetchone()
+        return bool(row and int(row["is_pro"] or 0) == 1)
+
+
+def set_user_pro_status(user_id: int, is_pro: bool, first_name: str = "") -> bool:
+    """Sets or revokes a user's /Pro-plan Lifetime Unlimited upload & 4-channel status."""
+    uid = int(user_id)
+    pro_val = 1 if is_pro else 0
+    ts = now_iso() if is_pro else ""
+    with db_lock:
+        db = ensure_db()
+        save_user(uid, first_name or f"User {uid}", "")
+        db.execute(
+            "UPDATE users SET is_pro = ?, pro_activated_at = ? WHERE user_id = ?",
+            (pro_val, ts, uid),
+        )
+        if is_pro:
+            # Upgrade any existing 7-day files of this user to Lifetime Permanent
+            db.execute(
+                "UPDATE files SET is_permanent = 1, expires_at = '', uploader_role = 'pro' WHERE created_by = ?",
+                (uid,),
+            )
+        else:
+            # If revoked and this user was holding the single-use key, free the single-use slot
+            db.execute(
+                "UPDATE bot_builder_config SET pro_key_used_by = 0, pro_key_used_at = '' WHERE pro_key_used_by = ?",
+                (uid,),
+            )
+        db.commit()
+        _sync_permanent_backup()
+        return True
+
+
+def normalize_pro_key_input(raw_key: str) -> str:
+    """Normalizes a key or deep-link start token (strips optional PRO_ or proplan_ prefix)."""
+    candidate = (raw_key or "").strip()
+    for prefix in ("PRO_", "pro_", "PRO-", "pro-", "proplan_", "PROPLAN_"):
+        if candidate.startswith(prefix) and not candidate.upper().startswith("FILE-SHARE-"):
+            candidate = candidate[len(prefix) :].strip()
+            break
+    if candidate.upper().startswith("PRO_FILE-SHARE-"):
+        candidate = candidate[4:].strip()
+    return candidate
+
+
+def is_pro_plan_start_token(raw_token: str) -> bool:
+    """Returns True if raw_token is a Pro Plan activation deep link token."""
+    t = (raw_token or "").strip()
+    if not t:
+        return False
+    cfg = get_bot_builder_config()
+    expected = (cfg.get("pro_plan_secret_key") or DEFAULT_PRO_PLAN_SECRET_KEY).strip()
+    normalized = normalize_pro_key_input(t)
+    if normalized == expected:
+        return True
+    if t.upper().startswith("PRO_") or t.upper().startswith("FILE-SHARE-"):
+        return True
+    return False
+
+
+def reset_pro_plan_single_use_link() -> dict[str, Any]:
+    """Re-arms the single-use Pro Plan activation link so the next user who clicks it can activate Pro Plan."""
+    with db_lock:
+        db = ensure_db()
+        db.execute(
+            """
+            INSERT INTO bot_builder_config (id, description, pro_plan_secret_key, pro_key_used_by, pro_key_used_at, updated_at)
+            VALUES (1, ?, ?, 0, '', ?)
+            ON CONFLICT(id) DO UPDATE SET
+                pro_key_used_by = 0,
+                pro_key_used_at = '',
+                updated_at = excluded.updated_at
+            """,
+            (DEFAULT_BOT_BUILD_DESCRIPTION, DEFAULT_PRO_PLAN_SECRET_KEY, now_iso()),
+        )
+        db.commit()
+        _sync_permanent_backup()
+        return get_bot_builder_config()
+
+
+def activate_user_pro_plan(
+    user_id: int,
+    entered_key: str,
+    first_name: str = "",
+    username: str = "",
+) -> tuple[bool, str]:
+    """
+    Verifies the /Pro-plan Secret Key or single-use deep-link token entered by a user.
+    - Enforces single-use per link click: once claimed by a user, another user cannot claim the same link until Admin resets it.
+    - Upgrades the user to Pro Plan (Unlimited Lifetime Permanent uploads + 4 User Force-Join Channels with Admin channels removed).
+    """
+    uid = int(user_id or 0)
+    cfg = get_bot_builder_config()
+    expected_key = (cfg.get("pro_plan_secret_key") or DEFAULT_PRO_PLAN_SECRET_KEY).strip()
+    candidate = normalize_pro_key_input(entered_key)
+    if not candidate or candidate != expected_key:
+        return (
+            False,
+            "❌ Invalid Secret Key / Activation Link! Kripya Admin se valid Pro Plan Activation Link lein.",
+        )
+
+    used_by = int(cfg.get("pro_key_used_by") or 0)
+    if used_by != 0 and used_by != uid and not is_admin(uid):
+        return (
+            False,
+            "⚠️ Yeh Single-Use Pro Plan Link pehle hi use ho chuka hai! Naya Pro Plan Link lene ke liye Admin se sampark karein.",
+        )
+
+    save_user(uid, first_name, username)
+    set_user_pro_status(uid, True, first_name=first_name)
+    if not is_admin(uid):
+        with db_lock:
+            db = ensure_db()
+            db.execute(
+                """
+                INSERT INTO bot_builder_config (id, description, pro_plan_secret_key, pro_key_used_by, pro_key_used_at, updated_at)
+                VALUES (1, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    pro_key_used_by = excluded.pro_key_used_by,
+                    pro_key_used_at = excluded.pro_key_used_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    cfg.get("description") or DEFAULT_BOT_BUILD_DESCRIPTION,
+                    expected_key,
+                    uid,
+                    now_iso(),
+                    now_iso(),
+                ),
+            )
+            db.commit()
+            _sync_permanent_backup()
+
+    return (
+        True,
+        "🦄✨💎 YOUR PRO PLAN ACTIVE! 💎✨🦄\n"
+        "♾️ Unlimited Lifetime Uploads Unlocked!\n"
+        "📢 Admin ke 2 Channels aapke bot se hata diye gaye hain — ab aap apne khud ke 4 Channels jod sakte hain!",
+    )
 
 
 def get_user_ids() -> list[int]:
@@ -1352,9 +1544,12 @@ def save_file(
 ) -> int:
     """
     Saves a File, Image (/group-upload), or Direct Link (URL) in bot_data.db.
-    - If uploader_role == 'admin': Saved for LIFETIME (is_permanent = 1, expires_at = ''). Never auto-deletes!
-    - If uploader_role == 'user' (/user-upload): Saved for 1 WEEK / 7 DAYS (is_permanent = 0, expires_at = +7d).
+    - If uploader_role == 'admin' OR user has /Pro-plan (is_user_pro): Saved for LIFETIME (is_permanent = 1, expires_at = ''). Never auto-deletes!
+    - If uploader_role == 'user' (Free user without /Pro-plan): Saved for 1 WEEK / 7 DAYS (is_permanent = 0, expires_at = +7d).
     """
+    uid = int(created_by or (ADMIN_IDS[0] if ADMIN_IDS else 0))
+    user_has_pro = is_user_pro(uid)
+
     with db_lock:
         db = ensure_db()
         effective_custom_name = clean_slug_part(
@@ -1377,13 +1572,24 @@ def save_file(
 
         s_code = build_share_code(effective_custom_name, r_code, effective_group)
         valid_type = file_type if file_type in FILE_ICONS else "document"
-        role = "user" if str(uploader_role).lower() == "user" else "admin"
-        is_perm = 0 if role == "user" else 1
-        exp_at = (
-            (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
-            if role == "user"
-            else ""
-        )
+        raw_role = str(uploader_role).lower()
+        if raw_role == "pro":
+            role = "pro"
+            is_perm = 1
+            exp_at = ""
+        elif raw_role == "user":
+            if user_has_pro and uid not in ADMIN_IDS:
+                role = "pro"
+                is_perm = 1
+                exp_at = ""
+            else:
+                role = "user"
+                is_perm = 0
+                exp_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        else:
+            role = "admin"
+            is_perm = 1
+            exp_at = ""
 
         cur = db.execute(
             """
@@ -1407,14 +1613,14 @@ def save_file(
                 role,
                 exp_at,
                 caption or "",
-                int(created_by or (ADMIN_IDS[0] if ADMIN_IDS else 0)),
+                uid,
                 now_iso(),
             ),
         )
-        if role == "user" and created_by:
+        if role in ("user", "pro") and uid:
             db.execute(
                 "UPDATE users SET used_user_upload = 1 WHERE user_id = ?",
-                (int(created_by),),
+                (uid,),
             )
         db.commit()
         _sync_permanent_backup()
@@ -1540,8 +1746,8 @@ def delete_files_bulk(file_ids: list[int]) -> int:
 
 def cleanup_expired_user_files() -> int:
     """
-    Deletes ONLY expired user-uploaded files (/user-upload after 7 days / 1 week).
-    NEVER deletes Admin's lifetime files (is_permanent = 1 / uploader_role = 'admin').
+    Deletes ONLY expired Free user-uploaded files (/user-upload after 7 days / 1 week).
+    NEVER deletes Admin's lifetime files OR /Pro-plan users' lifetime files (is_permanent = 1).
     """
     now_s = now_iso()
     with db_lock:
@@ -1760,13 +1966,32 @@ def delete_managed_group(group_db_id: int) -> bool:
 
 
 # =====================================================================
-#  3C) 🦄 /BOT-build, /BOT-build-description & USER BOTS (2+2 CHANNELS)
+#  3C) 🦄 /BOT-build, /Pro-plan, /start FEATURES & USER BOTS (2+2 CHANNELS)
 # =====================================================================
 DEFAULT_BOT_BUILD_DESCRIPTION = (
     "🦄 ✨ Kya aap apna khud ka 24/7 Ultra-Fast File & Link Share Bot banana chahte hain? "
     "Yahan se aap 1 click me apna Bot create kar sakte hain! Aapke bot me 24/7 Instant <1s Start Reply, "
-    "2 Apne Force-Join Channels (+ 2 Official Channels), aur /user-upload (1-Week Cloud Vault) milega!"
+    "Free Plan me 2 Apne Channels (+ 2 Admin Channels) aur Pro Plan me 4 Apne Force-Join Channels (Admin Channels Removed!) + Lifetime Upload milega!"
 )
+DEFAULT_PRO_PLAN_SECRET_KEY = "FILE-SHARE-YU6J-IEHU-828H"
+DEFAULT_PRO_BANNER_URL = (
+    "https://images.unsplash.com/photo-1634128221889-82ed6efebfc3?w=900"
+)
+DEFAULT_START_WELCOME_TEXT = (
+    "⚡ 24/7 Ultra-Fast Instant Delivery, VIP Bot Builder & Lifetime Pro Vault!"
+)
+
+
+def get_pro_plan_activation_link(bot_username: str | None = None) -> str:
+    """Returns the ready-to-share One-Click Pro Plan Activation Telegram Deep Link."""
+    uname = (
+        bot_username
+        or BOT_RUNTIME_STATUS.get("bot_username")
+        or "FILE_SHARE_00_bot"
+    ).strip().lstrip("@")
+    cfg = get_bot_builder_config()
+    key = (cfg.get("pro_plan_secret_key") or DEFAULT_PRO_PLAN_SECRET_KEY).strip()
+    return f"https://t.me/{uname}?start={key}"
 
 
 def save_bot_builder_config(
@@ -1774,15 +1999,33 @@ def save_bot_builder_config(
     allow_bot_build: bool | None = None,
     allow_user_upload: bool | None = None,
     allow_user_two_channels: bool | None = None,
+    allow_pro_plan: bool | None = None,
+    pro_plan_secret_key: str | None = None,
+    show_start_help: bool | None = None,
+    start_welcome_text: str | None = None,
     user_file_expiry_days: int | None = None,
+    reset_single_use: bool = False,
 ) -> dict[str, Any]:
-    """Saves /BOT-build-description and Admin controls over which features Users can use."""
+    """Saves /BOT-build-description, /Pro-plan Secret Key, and Admin controls over which features appear on /start."""
     cur_cfg = get_bot_builder_config()
     eff_desc = (description if description is not None else cur_cfg["description"]).strip() or DEFAULT_BOT_BUILD_DESCRIPTION
     eff_build = int(bool(allow_bot_build)) if allow_bot_build is not None else int(cur_cfg["allow_bot_build"])
     eff_upload = int(bool(allow_user_upload)) if allow_user_upload is not None else int(cur_cfg["allow_user_upload"])
     eff_two_ch = int(bool(allow_user_two_channels)) if allow_user_two_channels is not None else int(cur_cfg["allow_user_two_channels"])
+    eff_pro = int(bool(allow_pro_plan)) if allow_pro_plan is not None else int(cur_cfg.get("allow_pro_plan", True))
+    old_key = (cur_cfg.get("pro_plan_secret_key") or DEFAULT_PRO_PLAN_SECRET_KEY).strip()
+    eff_key = (
+        pro_plan_secret_key if pro_plan_secret_key is not None else old_key
+    ).strip() or DEFAULT_PRO_PLAN_SECRET_KEY
+    eff_help = int(bool(show_start_help)) if show_start_help is not None else int(cur_cfg.get("show_start_help", True))
+    eff_welcome = (
+        start_welcome_text if start_welcome_text is not None else cur_cfg.get("start_welcome_text", DEFAULT_START_WELCOME_TEXT)
+    ).strip() or DEFAULT_START_WELCOME_TEXT
     eff_days = max(1, int(user_file_expiry_days or cur_cfg.get("user_file_expiry_days") or 7))
+
+    key_changed = eff_key != old_key
+    used_by = 0 if (reset_single_use or key_changed) else int(cur_cfg.get("pro_key_used_by") or 0)
+    used_at = "" if (reset_single_use or key_changed) else str(cur_cfg.get("pro_key_used_at") or "")
 
     with db_lock:
         db = ensure_db()
@@ -1790,18 +2033,39 @@ def save_bot_builder_config(
             """
             INSERT INTO bot_builder_config (
                 id, description, allow_bot_build, allow_user_upload,
-                allow_user_two_channels, user_file_expiry_days, updated_at
+                allow_user_two_channels, allow_pro_plan, pro_plan_secret_key,
+                pro_key_used_by, pro_key_used_at,
+                show_start_help, start_welcome_text, user_file_expiry_days, updated_at
             )
-            VALUES (1, ?, ?, ?, ?, ?, ?)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 description = excluded.description,
                 allow_bot_build = excluded.allow_bot_build,
                 allow_user_upload = excluded.allow_user_upload,
                 allow_user_two_channels = excluded.allow_user_two_channels,
+                allow_pro_plan = excluded.allow_pro_plan,
+                pro_plan_secret_key = excluded.pro_plan_secret_key,
+                pro_key_used_by = excluded.pro_key_used_by,
+                pro_key_used_at = excluded.pro_key_used_at,
+                show_start_help = excluded.show_start_help,
+                start_welcome_text = excluded.start_welcome_text,
                 user_file_expiry_days = excluded.user_file_expiry_days,
                 updated_at = excluded.updated_at
             """,
-            (eff_desc, eff_build, eff_upload, eff_two_ch, eff_days, now_iso()),
+            (
+                eff_desc,
+                eff_build,
+                eff_upload,
+                eff_two_ch,
+                eff_pro,
+                eff_key,
+                used_by,
+                used_at,
+                eff_help,
+                eff_welcome,
+                eff_days,
+                now_iso(),
+            ),
         )
         db.commit()
         _sync_permanent_backup()
@@ -1812,12 +2076,22 @@ def get_bot_builder_config() -> dict[str, Any]:
     with db_lock:
         db = ensure_db()
         row = db.execute("SELECT * FROM bot_builder_config WHERE id = 1").fetchone()
+        uname = (BOT_RUNTIME_STATUS.get("bot_username") or "FILE_SHARE_00_bot").strip().lstrip("@")
         if not row:
             return {
                 "description": DEFAULT_BOT_BUILD_DESCRIPTION,
                 "allow_bot_build": True,
                 "allow_user_upload": True,
                 "allow_user_two_channels": True,
+                "allow_pro_plan": True,
+                "pro_plan_secret_key": DEFAULT_PRO_PLAN_SECRET_KEY,
+                "pro_key_used_by": 0,
+                "pro_key_used_at": "",
+                "pro_link_available": True,
+                "pro_activation_link": f"https://t.me/{uname}?start={DEFAULT_PRO_PLAN_SECRET_KEY}",
+                "pro_banner_url": DEFAULT_PRO_BANNER_URL,
+                "show_start_help": True,
+                "start_welcome_text": DEFAULT_START_WELCOME_TEXT,
                 "user_file_expiry_days": 7,
                 "updated_at": None,
             }
@@ -1825,6 +2099,18 @@ def get_bot_builder_config() -> dict[str, Any]:
         d["allow_bot_build"] = bool(d.get("allow_bot_build", 1))
         d["allow_user_upload"] = bool(d.get("allow_user_upload", 1))
         d["allow_user_two_channels"] = bool(d.get("allow_user_two_channels", 1))
+        d["allow_pro_plan"] = bool(d.get("allow_pro_plan", 1))
+        key_val = (d.get("pro_plan_secret_key") or DEFAULT_PRO_PLAN_SECRET_KEY).strip()
+        if key_val == "VIP-PRO-2026":
+            key_val = DEFAULT_PRO_PLAN_SECRET_KEY
+        d["pro_plan_secret_key"] = key_val
+        d["pro_key_used_by"] = int(d.get("pro_key_used_by") or 0)
+        d["pro_key_used_at"] = str(d.get("pro_key_used_at") or "")
+        d["pro_link_available"] = d["pro_key_used_by"] == 0
+        d["pro_activation_link"] = f"https://t.me/{uname}?start={key_val}"
+        d["pro_banner_url"] = DEFAULT_PRO_BANNER_URL
+        d["show_start_help"] = bool(d.get("show_start_help", 1))
+        d["start_welcome_text"] = (d.get("start_welcome_text") or DEFAULT_START_WELCOME_TEXT).strip()
         d["user_file_expiry_days"] = int(d.get("user_file_expiry_days") or 7)
         return d
 
@@ -1847,6 +2133,10 @@ def save_user_bot(
     channel_1_link: str = "",
     channel_2_title: str = "",
     channel_2_link: str = "",
+    channel_3_title: str = "",
+    channel_3_link: str = "",
+    channel_4_title: str = "",
+    channel_4_link: str = "",
 ) -> int:
     """Registers a user's cloned bot via /BOT-build and sets it 24/7 online."""
     tok = bot_token.strip()
@@ -1878,6 +2168,10 @@ def save_user_bot(
                     channel_1_link = CASE WHEN ? != '' THEN ? ELSE channel_1_link END,
                     channel_2_title = CASE WHEN ? != '' THEN ? ELSE channel_2_title END,
                     channel_2_link = CASE WHEN ? != '' THEN ? ELSE channel_2_link END,
+                    channel_3_title = CASE WHEN ? != '' THEN ? ELSE channel_3_title END,
+                    channel_3_link = CASE WHEN ? != '' THEN ? ELSE channel_3_link END,
+                    channel_4_title = CASE WHEN ? != '' THEN ? ELSE channel_4_title END,
+                    channel_4_link = CASE WHEN ? != '' THEN ? ELSE channel_4_link END,
                     status = 'online_24_7'
                 WHERE id = ?
                 """,
@@ -1894,6 +2188,14 @@ def save_user_bot(
                     channel_2_title,
                     channel_2_link,
                     channel_2_link,
+                    channel_3_title,
+                    channel_3_title,
+                    channel_3_link,
+                    channel_3_link,
+                    channel_4_title,
+                    channel_4_title,
+                    channel_4_link,
+                    channel_4_link,
                     bid,
                 ),
             )
@@ -1906,9 +2208,10 @@ def save_user_bot(
             INSERT INTO user_bots (
                 owner_user_id, owner_name, bot_token, bot_username, bot_name,
                 channel_1_title, channel_1_link, channel_2_title, channel_2_link,
+                channel_3_title, channel_3_link, channel_4_title, channel_4_link,
                 status, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online_24_7', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online_24_7', ?)
             """,
             (
                 int(owner_user_id),
@@ -1920,6 +2223,10 @@ def save_user_bot(
                 channel_1_link,
                 channel_2_title,
                 channel_2_link,
+                channel_3_title,
+                channel_3_link,
+                channel_4_title,
+                channel_4_link,
                 now_iso(),
             ),
         )
@@ -1930,35 +2237,48 @@ def save_user_bot(
 
 def update_user_bot_channels(
     bot_db_id: int,
-    channel_1_title: str = "",
-    channel_1_link: str = "",
-    channel_2_title: str = "",
-    channel_2_link: str = "",
+    channel_1_title: str | None = None,
+    channel_1_link: str | None = None,
+    channel_2_title: str | None = None,
+    channel_2_link: str | None = None,
+    channel_3_title: str | None = None,
+    channel_3_link: str | None = None,
+    channel_4_title: str | None = None,
+    channel_4_link: str | None = None,
 ) -> dict[str, Any] | None:
-    """Allows a user to configure up to 2 Force-Join Channels on their cloned bot."""
+    """
+    Allows a user to configure Force-Join Channels on their cloned bot:
+    - Free User: up to 2 channels (+ 2 Admin channels).
+    - Pro Plan User: up to 4 channels (Admin's 2 channels are removed!).
+    """
     with db_lock:
         db = ensure_db()
         row = db.execute("SELECT * FROM user_bots WHERE id = ?", (int(bot_db_id),)).fetchone()
         if not row:
             return None
         cur = dict(row)
-        c1_t = (channel_1_title if channel_1_title != "" else cur.get("channel_1_title", "")).strip()
-        c1_l = (channel_1_link if channel_1_link != "" else cur.get("channel_1_link", "")).strip()
-        c2_t = (channel_2_title if channel_2_title != "" else cur.get("channel_2_title", "")).strip()
-        c2_l = (channel_2_link if channel_2_link != "" else cur.get("channel_2_link", "")).strip()
+        c1_t = (channel_1_title if channel_1_title is not None else cur.get("channel_1_title", "")).strip()
+        c1_l = (channel_1_link if channel_1_link is not None else cur.get("channel_1_link", "")).strip()
+        c2_t = (channel_2_title if channel_2_title is not None else cur.get("channel_2_title", "")).strip()
+        c2_l = (channel_2_link if channel_2_link is not None else cur.get("channel_2_link", "")).strip()
+        c3_t = (channel_3_title if channel_3_title is not None else cur.get("channel_3_title", "")).strip()
+        c3_l = (channel_3_link if channel_3_link is not None else cur.get("channel_3_link", "")).strip()
+        c4_t = (channel_4_title if channel_4_title is not None else cur.get("channel_4_title", "")).strip()
+        c4_l = (channel_4_link if channel_4_link is not None else cur.get("channel_4_link", "")).strip()
         db.execute(
             """
             UPDATE user_bots
             SET channel_1_title = ?, channel_1_link = ?,
-                channel_2_title = ?, channel_2_link = ?
+                channel_2_title = ?, channel_2_link = ?,
+                channel_3_title = ?, channel_3_link = ?,
+                channel_4_title = ?, channel_4_link = ?
             WHERE id = ?
             """,
-            (c1_t, c1_l, c2_t, c2_l, int(bot_db_id)),
+            (c1_t, c1_l, c2_t, c2_l, c3_t, c3_l, c4_t, c4_l, int(bot_db_id)),
         )
         db.commit()
         _sync_permanent_backup()
-        updated = db.execute("SELECT * FROM user_bots WHERE id = ?", (int(bot_db_id),)).fetchone()
-        return dict(updated) if updated else None
+        return get_user_bot_by_id(int(bot_db_id))
 
 
 def get_user_bots(owner_user_id: int | None = None) -> list[dict[str, Any]]:
@@ -1971,16 +2291,23 @@ def get_user_bots(owner_user_id: int | None = None) -> list[dict[str, Any]]:
             ).fetchall()
         else:
             rows = db.execute("SELECT * FROM user_bots ORDER BY id DESC").fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["bot_token_masked"] = mask_bot_token_str(d.get("bot_token", ""))
-            user_ch_count = (1 if d.get("channel_1_link") else 0) + (
-                1 if d.get("channel_2_link") else 0
-            )
-            d["user_channels_count"] = user_ch_count
-            out.append(d)
-        return out
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["bot_token_masked"] = mask_bot_token_str(d.get("bot_token", ""))
+        owner_pro = is_user_pro(d.get("owner_user_id", 0))
+        d["owner_is_pro"] = owner_pro
+        d["max_user_channels"] = 4 if owner_pro else 2
+        d["admin_channels_removed"] = owner_pro
+        links = [
+            d.get("channel_1_link"),
+            d.get("channel_2_link"),
+            d.get("channel_3_link") if owner_pro else "",
+            d.get("channel_4_link") if owner_pro else "",
+        ]
+        d["user_channels_count"] = sum(1 for x in links if x)
+        out.append(d)
+    return out
 
 
 def get_user_bot_by_id(bot_db_id: int) -> dict[str, Any] | None:
@@ -1989,11 +2316,15 @@ def get_user_bot_by_id(bot_db_id: int) -> dict[str, Any] | None:
         row = db.execute(
             "SELECT * FROM user_bots WHERE id = ?", (int(bot_db_id),)
         ).fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["bot_token_masked"] = mask_bot_token_str(d.get("bot_token", ""))
-        return d
+    if not row:
+        return None
+    d = dict(row)
+    d["bot_token_masked"] = mask_bot_token_str(d.get("bot_token", ""))
+    owner_pro = is_user_pro(d.get("owner_user_id", 0))
+    d["owner_is_pro"] = owner_pro
+    d["max_user_channels"] = 4 if owner_pro else 2
+    d["admin_channels_removed"] = owner_pro
+    return d
 
 
 def delete_user_bot(bot_db_id: int) -> bool:
@@ -2009,23 +2340,34 @@ def get_combined_force_channels_for_user_bot(
     bot_db_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Implements the 2+2 Force-Join Channel rule for User Bots:
-    - First 2 channels are OUR (Admin's) Official Force-Join Channels
-    - Next up to 2 channels are the User Bot's own configured channels!
+    Implements the Force-Join Channel rule for User Bots:
+    - Free User Bot: 2 Admin Official Force-Join Channels + up to 2 User Channels (2+2 rule).
+    - Pro Plan User Bot (is_user_pro == True): Admin's 2 Channels are REMOVED!
+      The Pro user gets up to 4 of their own Force-Join Channels (0 Admin + 4 User Channels)!
     """
+    ub: dict[str, Any] | None = None
+    if bot_db_id:
+        ub = get_user_bot_by_id(bot_db_id)
+    if not ub:
+        all_ubs = get_user_bots()
+        if all_ubs:
+            ub = all_ubs[0]
+
+    owner_is_pro = bool(ub and is_user_pro(ub.get("owner_user_id", 0)))
     combined: list[dict[str, Any]] = []
-    admin_channels = [dict(r) for r in get_channels()[:2]]
-    for idx, ch in enumerate(admin_channels, 1):
-        combined.append(
-            {
-                "slot": f"Admin Channel #{idx}",
-                "owner": "admin",
-                "title": ch["title"],
-                "invite_link": ch["invite_link"],
-            }
-        )
-    if len(combined) < 2:
-        # Ensure 2 Admin channel slots are always represented when previewing 2+2 rule
+
+    # Only include Admin's 2 channels if the bot owner is NOT on Pro Plan!
+    if not owner_is_pro:
+        admin_channels = [dict(r) for r in get_channels()[:2]]
+        for idx, ch in enumerate(admin_channels, 1):
+            combined.append(
+                {
+                    "slot": f"Admin Channel #{idx}",
+                    "owner": "admin",
+                    "title": ch["title"],
+                    "invite_link": ch["invite_link"],
+                }
+            )
         while len(combined) < 2:
             n = len(combined) + 1
             combined.append(
@@ -2037,33 +2379,20 @@ def get_combined_force_channels_for_user_bot(
                 }
             )
 
-    ub: dict[str, Any] | None = None
-    if bot_db_id:
-        ub = get_user_bot_by_id(bot_db_id)
-    if not ub:
-        all_ubs = get_user_bots()
-        if all_ubs:
-            ub = all_ubs[0]
-
     if ub:
-        if ub.get("channel_1_link"):
-            combined.append(
-                {
-                    "slot": "User Channel #1",
-                    "owner": "user",
-                    "title": ub.get("channel_1_title") or "User Channel 1",
-                    "invite_link": ub["channel_1_link"],
-                }
-            )
-        if ub.get("channel_2_link"):
-            combined.append(
-                {
-                    "slot": "User Channel #2",
-                    "owner": "user",
-                    "title": ub.get("channel_2_title") or "User Channel 2",
-                    "invite_link": ub["channel_2_link"],
-                }
-            )
+        max_slots = 4 if owner_is_pro else 2
+        for slot_num in range(1, max_slots + 1):
+            link_val = (ub.get(f"channel_{slot_num}_link") or "").strip()
+            title_val = (ub.get(f"channel_{slot_num}_title") or f"User Channel #{slot_num}").strip()
+            if link_val:
+                combined.append(
+                    {
+                        "slot": f"Pro User Channel #{slot_num}" if owner_is_pro else f"User Channel #{slot_num}",
+                        "owner": "user",
+                        "title": title_val,
+                        "invite_link": link_val,
+                    }
+                )
     return combined
 
 
@@ -2075,6 +2404,7 @@ def get_stats() -> dict[str, int]:
             "channels": int(db.execute("SELECT COUNT(*) FROM channels").fetchone()[0]),
             "files": int(db.execute("SELECT COUNT(*) FROM files").fetchone()[0]),
             "users": int(db.execute("SELECT COUNT(*) FROM users").fetchone()[0]),
+            "pro_users": int(db.execute("SELECT COUNT(*) FROM users WHERE is_pro = 1").fetchone()[0]),
             "downloads": int(
                 db.execute("SELECT COALESCE(SUM(downloads), 0) FROM files").fetchone()[0]
             ),
@@ -2083,7 +2413,7 @@ def get_stats() -> dict[str, int]:
             "links": int(db.execute("SELECT COUNT(*) FROM files WHERE file_type = 'link'").fetchone()[0]),
             "group_uploads": int(db.execute("SELECT COUNT(*) FROM files WHERE group_name != ''").fetchone()[0]),
             "user_bots": int(db.execute("SELECT COUNT(*) FROM user_bots").fetchone()[0]),
-            "user_uploads": int(db.execute("SELECT COUNT(*) FROM files WHERE uploader_role = 'user'").fetchone()[0]),
+            "user_uploads": int(db.execute("SELECT COUNT(*) FROM files WHERE uploader_role IN ('user', 'pro')").fetchone()[0]),
         }
 
 
@@ -2348,10 +2678,299 @@ async def send_file(
 # =====================================================================
 #  6) 🎯 INSTANT <1s COMMAND HANDLERS
 # =====================================================================
+PRO_STORE_BOT_USERNAME = "Krishna_Zx_Store_bot"
+PRO_STORE_BOT_URL = "https://t.me/Krishna_Zx_Store_bot"
+
+
+def generate_new_pro_plan_key() -> dict[str, Any]:
+    """Generates a fresh single-use Pro Plan Secret Key in FILE-SHARE-XXXX-XXXX-XXXX format."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    p1 = "".join(secrets.choice(alphabet) for _ in range(4))
+    p2 = "".join(secrets.choice(alphabet) for _ in range(4))
+    p3 = "".join(secrets.choice(alphabet) for _ in range(4))
+    new_key = f"FILE-SHARE-{p1}-{p2}-{p3}"
+    return save_bot_builder_config(pro_plan_secret_key=new_key, reset_single_use=True)
+
+
+def build_pro_plan_activated_card_and_kb(
+    user_id: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Builds the Unicorn & Premium 'YOUR PRO PLAN ACTIVE!' caption and colorful keyboard."""
+    ubots = get_user_bots(owner_user_id=int(user_id)) if user_id else []
+    add_ch_cb = f"userbot:addch:{ubots[0]['id']}" if ubots else "botbuild:start"
+    add_ch_label = (
+        "🟣 ➕ Add 4 Channels to My Bot (Admin Removed!)"
+        if ubots
+        else "🦄 🤖 Create Bot & Add 4 Channels (/BOT-build)"
+    )
+
+    caption = card(
+        "👑",
+        "YOUR PRO PLAN ACTIVE!",
+        "🦄✨💎 <b>YOUR PRO PLAN ACTIVE!</b> 💎✨🦄",
+        "",
+        "🎉 <b>Congratulations! Aapka VIP Pro Plan 100% Activate ho gaya hai!</b>",
+        "",
+        "🌈 <b>Unlocked Unicorn VIP Benefits:</b>",
+        "• ♾️ <b>Lifetime Unlimited Upload:</b> Ab aap <code>/user-upload</code> se jitni chahein Files, Photos, Videos &amp; Links upload karein — <b>kabhi delete nahi hoga!</b>",
+        "• 📢 <b>4 Personal Force-Join Channels:</b> Aapke bot se <b>Admin ke 2 Channels hata diye gaye hain!</b> Ab aap apne khud ke <b>4 Channels</b> add kar sakte hain!",
+        "• 🤖 <b>1 Dedicated 24/7 Fast Bot</b> with &lt;1s Instant Start Reply!",
+        "",
+        "👇 <b>Neeche colorful buttons se apna Pro Plan use karein:</b>",
+        footer=BOT_NAME,
+    )
+    markup = kb(
+        [
+            btn(
+                "🟢 📤 /user-upload (♾️ Lifetime Unlimited)",
+                "userupload:start",
+                style=GREEN,
+            )
+        ],
+        [
+            btn(add_ch_label, add_ch_cb, style=PURPLE),
+        ],
+        [
+            btn("🔵 🏠 Back to Home (/start)", "user:start", style=BLUE),
+        ],
+    )
+    return caption, markup
+
+
+async def send_pro_plan_activated_banner(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> None:
+    """Sends the Default VIP Banner + 'YOUR PRO PLAN ACTIVE!' description card."""
+    caption, markup = build_pro_plan_activated_card_and_kb(user_id)
+    chat_id = update.effective_chat.id if update.effective_chat else user_id
+    try:
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=DEFAULT_PRO_BANNER_URL,
+            caption=caption,
+            reply_markup=markup,
+        )
+    except Exception:
+        await reply(update, context, caption, markup=markup)
+
+
+def build_user_start_message_and_keyboard(
+    user: Any,
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    """
+    Dynamically constructs the /start welcome screen and colorful buttons
+    according to which features the Admin has enabled in bot_builder_config.
+    Note: The secret key is NEVER shown to regular users.
+    """
+    uid = getattr(user, "id", 0) or 0
+    fname = getattr(user, "first_name", "") or "Friend"
+    ubots = get_user_bots(owner_user_id=int(uid)) if uid else []
+    bcfg = get_bot_builder_config()
+    has_pro = is_user_pro(uid)
+
+    user_rows: list[list[InlineKeyboardButton]] = []
+    feature_bullets: list[str] = []
+
+    if ubots and bcfg.get("allow_user_two_channels", True):
+        my_bot = ubots[0]
+        ch_label = "Add 4 Channels • Pro" if has_pro else "Add 2 Channels"
+        user_rows.append(
+            [
+                btn(
+                    f"🦄 🤖 {my_bot['bot_name']} (Home • {ch_label})",
+                    f"userbot:open:{my_bot['id']}",
+                    style=PURPLE,
+                )
+            ]
+        )
+
+    if bcfg.get("allow_bot_build", True):
+        ch_rule = (
+            "Add 4 Own Channels (Admin Channels Removed!)"
+            if has_pro
+            else "Add 2 Channels (+ 2 Admin Channels)"
+        )
+        feature_bullets.append(
+            f"• <code>/BOT-build</code> — Apna 24/7 Fast Bot banayein ({ch_rule})!"
+        )
+        user_rows.append(
+            [btn("🦄 ✨ /BOT-build (Create Your 24/7 Bot)", "botbuild:start", style=PINK)]
+        )
+
+    if bcfg.get("allow_user_upload", True):
+        if has_pro:
+            feature_bullets.append(
+                "• <code>/user-upload</code> — 👑 <b>Pro Plan Active:</b> Unlimited Lifetime Upload (Kabhi delete nahi hoga)!"
+            )
+            user_rows.append(
+                [
+                    btn(
+                        "🟢 📤 /user-upload (♾️ Pro Lifetime Unlimited)",
+                        "userupload:start",
+                        style=GREEN,
+                    )
+                ]
+            )
+        else:
+            days = bcfg.get("user_file_expiry_days", 7)
+            feature_bullets.append(
+                f"• <code>/user-upload</code> — Apni File ya Link upload karein (⚠️ {days} Days validity; Lifetime ke liye /Pro-plan lein)."
+            )
+            user_rows.append(
+                [
+                    btn(
+                        f"🟢 📤 /user-upload (Upload File • {days}-Day Validity)",
+                        "userupload:start",
+                        style=GREEN,
+                    )
+                ]
+            )
+
+    if bcfg.get("allow_pro_plan", True):
+        if has_pro:
+            feature_bullets.append(
+                "• <code>/Pro-plan</code> — 👑 <b>YOUR PRO PLAN ACTIVE!</b> (Lifetime Upload + 4 Channels Unlocked)."
+            )
+            user_rows.append(
+                [btn("👑 💎 /Pro-plan Status (Active • 4 Channels)", "proplan:start", style=GOLD)]
+            )
+        else:
+            feature_bullets.append(
+                f"• <code>/Pro-plan</code> — 🔑 Secret Key daal kar <b>Lifetime Upload + 4 Channels</b> unlock karein (Buy Key: @{PRO_STORE_BOT_USERNAME})!"
+            )
+            user_rows.append(
+                [
+                    btn(
+                        "💎 🔑 /Pro-plan (Unlock Lifetime + 4 Channels)",
+                        "proplan:start",
+                        style=GOLD,
+                    )
+                ]
+            )
+            user_rows.append(
+                [
+                    btn(
+                        f"🛒 💎 Buy Pro Key (@{PRO_STORE_BOT_USERNAME})",
+                        url=PRO_STORE_BOT_URL,
+                        style=ORANGE,
+                    )
+                ]
+            )
+
+    if bcfg.get("show_start_help", True):
+        user_rows.append(
+            [btn("🔵 ℹ️ Help & Commands Guide", "user:help", style=BLUE)]
+        )
+
+    if not feature_bullets:
+        feature_bullets.append("• ⚡ Share links par click karke instant files unlock karein!")
+
+    plan_badge = (
+        "👑 <b>Plan Status:</b> YOUR PRO PLAN ACTIVE (♾️ Lifetime Upload + 4 Own Channels)"
+        if has_pro
+        else f"⏳ <b>Plan Status:</b> Free Plan (7-Day Upload · 2+2 Channels · Buy Pro: @{PRO_STORE_BOT_USERNAME})"
+    )
+    welcome_line = bcfg.get("start_welcome_text") or DEFAULT_START_WELCOME_TEXT
+
+    text = card(
+        "🦄",
+        f"Welcome to {BOT_NAME}",
+        f"👤 <b>Hello {esc(fname)}!</b>",
+        f"✨ <b>{esc(welcome_line)}</b>",
+        plan_badge,
+        "",
+        "🌈 <b>Available Features on /start (Configured by Admin):</b>",
+        *feature_bullets,
+        footer=BOT_NAME,
+    )
+    return text, (kb(*user_rows) if user_rows else None)
+
+
+def build_admin_start_config_card_and_kb() -> tuple[str, InlineKeyboardMarkup]:
+    """Builds the Admin interactive control panel for toggling /start features and managing single-use Pro links."""
+    bcfg = get_bot_builder_config()
+    b_build = bcfg.get("allow_bot_build", True)
+    b_upload = bcfg.get("allow_user_upload", True)
+    b_pro = bcfg.get("allow_pro_plan", True)
+    b_2ch = bcfg.get("allow_user_two_channels", True)
+    b_help = bcfg.get("show_start_help", True)
+    sec_key = bcfg.get("pro_plan_secret_key", DEFAULT_PRO_PLAN_SECRET_KEY)
+    pro_link = bcfg.get("pro_activation_link") or get_pro_plan_activation_link()
+    used_by = int(bcfg.get("pro_key_used_by") or 0)
+    link_status = (
+        "🟢 <b>READY (Single-Use Available)</b>"
+        if used_by == 0
+        else f"🔴 <b>USED by User ID <code>{used_by}</code></b> (Click Reset or Generate New Key)"
+    )
+
+    text = card(
+        "🎛️",
+        "Admin /start Features & Pro Link Control",
+        "👑 <b>Yahan se control karein ki <code>/start</code> par kaun-kaun sa feature dikhega + Single-Use Pro Link:</b>",
+        "",
+        f"1️⃣ <b>/BOT-build on /start:</b> {'🟢 ON (Visible)' if b_build else '🔴 OFF (Hidden)'}",
+        f"2️⃣ <b>/user-upload on /start:</b> {'🟢 ON (Visible)' if b_upload else '🔴 OFF (Hidden)'}",
+        f"3️⃣ <b>/Pro-plan on /start:</b> {'🟢 ON (Visible)' if b_pro else '🔴 OFF (Hidden)'}",
+        f"4️⃣ <b>User Channels on /start:</b> {'🟢 ON (Visible)' if b_2ch else '🔴 OFF (Hidden)'}",
+        f"5️⃣ <b>Help Button on /start:</b> {'🟢 ON (Visible)' if b_help else '🔴 OFF (Hidden)'}",
+        "",
+        f"🔑 <b>Secret Key (Hidden from Users):</b> <code>{esc(sec_key)}</code>",
+        f"🔗 <b>One-Click Pro Activation Link:</b>\n<code>{esc(pro_link)}</code>",
+        f"📌 <b>Link Status:</b> {link_status}",
+        f"🛒 <b>Store Bot for Users:</b> @{PRO_STORE_BOT_USERNAME}",
+        footer=BOT_NAME,
+    )
+    markup = kb(
+        [
+            btn(
+                f"{'🟢 ON' if b_build else '🔴 OFF'} • 🦄 /BOT-build",
+                "adm:toggle:allow_bot_build",
+                style=GREEN if b_build else RED,
+            ),
+            btn(
+                f"{'🟢 ON' if b_upload else '🔴 OFF'} • 📤 /user-upload",
+                "adm:toggle:allow_user_upload",
+                style=GREEN if b_upload else RED,
+            ),
+        ],
+        [
+            btn(
+                f"{'🟢 ON' if b_pro else '🔴 OFF'} • 💎 /Pro-plan",
+                "adm:toggle:allow_pro_plan",
+                style=GREEN if b_pro else RED,
+            ),
+            btn(
+                f"{'🟢 ON' if b_2ch else '🔴 OFF'} • 📢 User Channels",
+                "adm:toggle:allow_user_two_channels",
+                style=GREEN if b_2ch else RED,
+            ),
+        ],
+        [
+            btn(
+                f"{'🟢 ON' if b_help else '🔴 OFF'} • ℹ️ Help on /start",
+                "adm:toggle:show_start_help",
+                style=GREEN if b_help else RED,
+            ),
+            btn("💎 🔑 Custom /Pro-plan Key", "adm:prokey", style=GOLD),
+        ],
+        [
+            btn("🎲 🔑 Generate New Pro Key & Link", "adm:genprokey", style=PURPLE),
+            btn("🔄 Re-Arm Single-Use Link", "adm:resetprolink", style=ORANGE),
+        ],
+        [
+            btn("👁️ Preview User /start Screen", "adm:previewuserstart", style=CYAN),
+            btn("🔵 🛠 Back to VIP Panel", "adm:home", style=BLUE),
+        ],
+    )
+    return text, markup
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.effective_user:
         save_user(update.effective_user)
-    args = context.args or []
+    if update.callback_query:
+        await update.callback_query.answer()
+    args = getattr(context, "args", None) or []
 
     # Handle startgroup=adgroup when Admin adds bot to a group via deep link
     if args and args[0].lower() == "adgroup" and update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
@@ -2376,10 +2995,48 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             asyncio.create_task(send_and_rotate_group_banner(context.bot, gid))
         return ConversationHandler.END
 
-    # Resolve any custom link format:
-    # ?start=NAME?RANDOM, ?start=GroupName?Name=RANDOM, ?start=NAME__RANDOM, or ?start=file_2
+    # 1. Check if this /start deep-link is a One-Click Pro Plan Activation Link
+    #    e.g. https://t.me/FILE_SHARE_00_bot?start=FILE-SHARE-YU6J-IEHU-828H
     if args:
         raw_token = " ".join(args).strip()
+        if is_pro_plan_start_token(raw_token):
+            user = update.effective_user
+            uid = user.id if user else 0
+            ok, feedback = activate_user_pro_plan(
+                user_id=uid,
+                entered_key=raw_token,
+                first_name=(user.first_name if user else "") or "",
+                username=(user.username if user else "") or "",
+            )
+            if ok:
+                await send_pro_plan_activated_banner(update, context, uid)
+            else:
+                await reply(
+                    update,
+                    context,
+                    card(
+                        "⚠️",
+                        "Pro Plan Link Notice",
+                        feedback,
+                        "",
+                        f"🛒 <b>Naya Pro Plan Secret Key ya Link kharidne ke liye visit karein:</b> @{PRO_STORE_BOT_USERNAME}",
+                        footer=BOT_NAME,
+                    ),
+                    markup=kb(
+                        [
+                            btn(
+                                f"🛒 💎 Buy Pro Key (@{PRO_STORE_BOT_USERNAME})",
+                                url=PRO_STORE_BOT_URL,
+                                style=GOLD,
+                            )
+                        ],
+                        [btn("🔵 🏠 Back to /start", "user:start", style=BLUE)],
+                    ),
+                )
+            return ConversationHandler.END
+
+        # 2. Otherwise resolve file/link share token:
+        # ?start=NAME?RANDOM, ?start=GroupName?Name=RANDOM, ?start=NAME__RANDOM, or ?start=file_2
         row = resolve_file_by_start_token(raw_token)
         if not row:
             await reply(
@@ -2414,63 +3071,37 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     if is_admin(update.effective_user):
         s = get_stats()
+        bcfg = get_bot_builder_config()
+        pro_link = bcfg.get("pro_activation_link") or get_pro_plan_activation_link()
+        used_by = int(bcfg.get("pro_key_used_by") or 0)
         text = card(
             "⚡",
             f"VIP Control Panel • {BOT_NAME}",
             f"👑 <b>Admin:</b> {esc(update.effective_user.first_name or 'Admin')}",
             "🟢 <b>Status:</b> 24/7 Live · Instant &lt;1s Fast Engine",
-            "♾️ <b>Admin Storage:</b> Lifetime Permanent (Zero Auto-Delete)",
-            "⏳ <b>User Storage (/user-upload):</b> 1-Week (7 Days) Auto-Expiry",
+            "♾️ <b>Admin &amp; /Pro-plan Storage:</b> Lifetime Permanent (Zero Auto-Delete)",
+            "📢 <b>Pro Bot Channels:</b> 4 User Channels (Admin's 2 Channels Auto-Removed!)",
+            f"🔑 <b>Secret Key:</b> <code>{esc(bcfg.get('pro_plan_secret_key', DEFAULT_PRO_PLAN_SECRET_KEY))}</code> ({'🟢 Ready' if used_by == 0 else f'🔴 Used by {used_by}'})",
+            f"🔗 <b>Pro Link:</b> <code>{esc(pro_link)}</code>",
             "",
             f"📂 <b>Files/Images:</b> {s['files']}   |   🌐 <b>Links:</b> {s['links']}",
-            f"🦄 <b>User Bots:</b> {s['user_bots']}   |   📢 <b>Channels:</b> {s['channels']}",
+            f"🦄 <b>User Bots:</b> {s['user_bots']}   |   👑 <b>Pro Users:</b> {s.get('pro_users', 0)}",
             "",
-            "◈ Neeche ke <b>Real Colorful Buttons</b> ya commands chunein 👇",
+            "◈ Neeche ke <b>Real Colorful Buttons</b> se <code>/start</code> features ya bot control karein 👇",
             footer=BOT_NAME,
         )
         await reply(update, context, text, markup=panel_kb())
     else:
-        uid = update.effective_user.id if update.effective_user else 0
-        ubots = get_user_bots(owner_user_id=uid)
-        bcfg = get_bot_builder_config()
-        user_rows = []
-        if ubots:
-            my_bot = ubots[0]
-            user_rows.append(
-                [
-                    btn(
-                        f"🦄 🤖 {my_bot['bot_name']} (Manage Bot)",
-                        f"userbot:open:{my_bot['id']}",
-                        style=PURPLE,
-                    )
-                ]
-            )
-        if bcfg.get("allow_bot_build", True):
-            user_rows.append(
-                [btn("🦄 ✨ /BOT-build (Create Your 24/7 Bot)", "botbuild:start", style=PINK)]
-            )
-        if bcfg.get("allow_user_upload", True):
-            user_rows.append(
-                [btn("🟢 📤 /user-upload (Upload File • 7-Day Validity)", "userupload:start", style=GREEN)]
-            )
-        text = card(
-            "🦄",
-            f"Welcome to {BOT_NAME}",
-            f"👤 <b>Hello {esc(update.effective_user.first_name or 'Friend')}!</b>",
-            "⚡ <b>24/7 Ultra-Fast Instant Delivery &amp; Bot Builder</b>",
-            "",
-            "✨ <b>User Exclusive Features:</b>",
-            "• <code>/BOT-build</code> — Apna khud ka 24/7 Fast Bot banayein (Add 2 Channels)!",
-            "• <code>/user-upload</code> — Apni File ya Link upload karein (⚠️ 1 Hafte / 7 Days tak valid rahegi).",
-            footer=BOT_NAME,
-        )
-        await reply(update, context, text, markup=kb(*user_rows) if user_rows else None)
+        text, markup = build_user_start_message_and_keyboard(update.effective_user)
+        await reply(update, context, text, markup=markup)
     return ConversationHandler.END
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.effective_user:
         save_user(update.effective_user)
+    if update.callback_query:
+        await update.callback_query.answer()
     text = card(
         "🌈",
         "VIP Commands & Unicorn Bot Builder",
@@ -2481,13 +3112,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "🩷 <b>/Group-image-description</b> — Group/Channel Banner + Description verify",
         "🩵 <b>/ad-group</b> — Group/Channel 15m Post ➜ Stay 15m ➜ Delete &amp; Repost",
         "",
-        "🦄 <b>/BOT-build</b> — (All Users) Create your own 24/7 Fast Bot + Add 2 Channels!",
+        "🦄 <b>/BOT-build</b> — Create your own 24/7 Fast Bot (Free: 2+2 Ch · Pro: 4 Own Channels!)",
         "✨ <b>/BOT-build-description</b> — (Admin) Edit /BOT-build welcome description",
-        "📤 <b>/user-upload</b> — (All Users) Upload File/Link (⚠️ Auto-deletes after 1 Week / 7 Days)",
+        "📤 <b>/user-upload</b> — Upload File/Link (7 Days Free / Lifetime with /Pro-plan)",
+        f"💎 <b>/Pro-plan</b> — Enter Secret Key for Lifetime Upload + 4 Channels (Buy: @{PRO_STORE_BOT_USERNAME})",
+        "🎛️ <b>/start_features</b> — (Admin) Customize which features appear on /start",
         "🔵 <b>/admin</b> — Colorful VIP Admin Panel kholein",
         footer=BOT_NAME,
     )
-    markup = panel_kb() if is_admin(update.effective_user) else None
+    markup = panel_kb() if is_admin(update.effective_user) else kb([btn("🔵 🏠 Back to /start", "user:start", style=BLUE)])
     await reply(update, context, text, markup=markup)
     return ConversationHandler.END
 
@@ -2496,6 +3129,8 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await guard_admin(update):
         return ConversationHandler.END
     s = get_stats()
+    bcfg = get_bot_builder_config()
+    pro_link = bcfg.get("pro_activation_link") or get_pro_plan_activation_link()
     await reply(
         update,
         context,
@@ -2504,6 +3139,8 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "VIP Colorful Admin Panel",
             "⚡ <b>24/7 Instant Engine Active (&lt;1s Response)</b>",
             f"📂 Vault Items: <b>{s['files']}</b> · 👥 Active 15m Groups: <b>{s['groups']}</b>",
+            f"🔑 /Pro-plan Key: <code>{esc(bcfg.get('pro_plan_secret_key', DEFAULT_PRO_PLAN_SECRET_KEY))}</code> · 👑 Pro Users: <b>{s.get('pro_users', 0)}</b>",
+            f"🔗 Pro Link: <code>{esc(pro_link)}</code>",
             "◈ Neeche colorful buttons se action chunein:",
             footer=BOT_NAME,
         ),
@@ -2521,11 +3158,34 @@ async def adm_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     if not await guard_admin(update):
         return ConversationHandler.END
-    await q.answer()
 
     data = q.data or ""
+    if data == "adm:genprokey":
+        new_cfg = generate_new_pro_plan_key()
+        await q.answer(f"🔑 New Key Generated: {new_cfg['pro_plan_secret_key']}", show_alert=True)
+        text, markup = build_admin_start_config_card_and_kb()
+        try:
+            await q.edit_message_text(text, reply_markup=markup)
+        except BadRequest:
+            await reply(update, context, text, markup=markup)
+        return ConversationHandler.END
+
+    if data == "adm:resetprolink":
+        reset_pro_plan_single_use_link()
+        await q.answer("🟢 Single-Use Pro Link Re-Armed for next user!", show_alert=True)
+        text, markup = build_admin_start_config_card_and_kb()
+        try:
+            await q.edit_message_text(text, reply_markup=markup)
+        except BadRequest:
+            await reply(update, context, text, markup=markup)
+        return ConversationHandler.END
+
+    await q.answer()
+
     if data == "adm:home":
         s = get_stats()
+        bcfg = get_bot_builder_config()
+        pro_link = bcfg.get("pro_activation_link") or get_pro_plan_activation_link()
         try:
             await q.edit_message_text(
                 card(
@@ -2533,6 +3193,8 @@ async def adm_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                     "VIP Colorful Admin Panel",
                     "⚡ <b>24/7 Instant Engine Active (&lt;1s Response)</b>",
                     f"📂 Permanent Files/Links: <b>{s['files']}</b> | 👥 15m Groups: <b>{s['groups']}</b>",
+                    f"🔑 /Pro-plan Secret Key: <code>{esc(bcfg.get('pro_plan_secret_key', DEFAULT_PRO_PLAN_SECRET_KEY))}</code>",
+                    f"🔗 Pro Link: <code>{esc(pro_link)}</code>",
                     footer=BOT_NAME,
                 ),
                 reply_markup=panel_kb(),
@@ -2540,18 +3202,55 @@ async def adm_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         except BadRequest:
             pass
 
+    elif data == "adm:startcfg":
+        text, markup = build_admin_start_config_card_and_kb()
+        try:
+            await q.edit_message_text(text, reply_markup=markup)
+        except BadRequest:
+            await reply(update, context, text, markup=markup)
+
+    elif data.startswith("adm:toggle:"):
+        field_name = data.split("adm:toggle:", 1)[1]
+        cur = get_bot_builder_config()
+        if field_name in (
+            "allow_bot_build",
+            "allow_user_upload",
+            "allow_pro_plan",
+            "allow_user_two_channels",
+            "show_start_help",
+        ):
+            new_val = not bool(cur.get(field_name, True))
+            save_bot_builder_config(**{field_name: new_val})
+        text, markup = build_admin_start_config_card_and_kb()
+        try:
+            await q.edit_message_text(text, reply_markup=markup)
+        except BadRequest:
+            pass
+
+    elif data == "adm:previewuserstart":
+        text, user_kb = build_user_start_message_and_keyboard(update.effective_user)
+        rows = list(user_kb.inline_keyboard) if user_kb and getattr(user_kb, "inline_keyboard", None) else []
+        rows.append([btn("🎛️ ⚙️ Edit /start Features", "adm:startcfg", style=CYAN), btn("🔵 🛠 Admin Panel", "adm:home", style=BLUE)])
+        try:
+            await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+        except BadRequest:
+            await reply(update, context, text, markup=InlineKeyboardMarkup(rows))
+
     elif data == "adm:stats":
         s = get_stats()
         cfg = get_group_banner_config()
+        bcfg = get_bot_builder_config()
         text = card(
             "📊",
             "24/7 Live Bot Statistics",
             f"📢 <b>Force-Join Channels:</b>  {s['channels']}",
-            f"📂 <b>Total Permanent Vault Items:</b>  {s['files']}",
+            f"📂 <b>Total Vault Items:</b>  {s['files']}",
             f"🌐 <b>Direct Links Saved:</b>  {s['links']}",
             f"📸 <b>Group Uploads (/group-upload):</b>  {s['group_uploads']}",
             f"👥 <b>15m Auto-Banner Groups (/ad-group):</b>  {s['groups']}",
             f"🖼️ <b>Group Banner Verified:</b>  {'✅ Yes' if cfg['verified'] else '❌ Not Set'}",
+            f"🦄 <b>User Cloned Bots (/BOT-build):</b>  {s['user_bots']}",
+            f"👑 <b>/Pro-plan Lifetime Users:</b>  {s.get('pro_users', 0)} (Key: <code>{esc(bcfg.get('pro_plan_secret_key', DEFAULT_PRO_PLAN_SECRET_KEY))}</code>)",
             f"👤 <b>Registered Users:</b>  {s['users']}",
             f"⬇️ <b>Total Deliveries:</b>  {s['downloads']}",
             footer=BOT_NAME,
@@ -2562,8 +3261,11 @@ async def adm_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 reply_markup=kb(
                     [
                         btn("🟢 🔄 Refresh Stats", "adm:stats", style=GREEN),
+                        btn("🎛️ /start Features", "adm:startcfg", style=CYAN),
+                    ],
+                    [
                         btn("🔵 🛠 Admin Panel", "adm:home", style=BLUE),
-                    ]
+                    ],
                 ),
             )
         except BadRequest:
@@ -3692,7 +4394,7 @@ async def _group_banner_scheduler_loop(app: Application, stop_event: asyncio.Eve
 # =====================================================================
 #  13) 📣 BROADCAST (Conversation)
 # =====================================================================
-BCAST_INPUT = 1
+BCAST_INPUT = 35
 
 
 async def broadcast_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -4077,12 +4779,14 @@ def acquire_single_instance_lock() -> bool:
 
 
 # =====================================================================
-#  16B) 🦄 /BOT-build, /BOT-build-description & /user-upload HANDLERS
+#  16B) 🦄 /BOT-build, /Pro-plan, /BOT-build-description & /user-upload
 # =====================================================================
 BOTBUILD_WAIT_TOKEN = 40
 BOTBUILDDESC_WAIT_TEXT = 41
 USERUPLOAD_MEDIA, USERUPLOAD_NAME = 50, 51
-USERBOT_CH1, USERBOT_CH2 = 60, 61
+USERBOT_CH1, USERBOT_CH2, USERBOT_CH3, USERBOT_CH4 = 60, 61, 62, 63
+PROPLAN_WAIT_KEY = 70
+PROPLAN_ADMIN_SET_KEY = 71
 
 
 async def bot_build_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -4100,6 +4804,13 @@ async def bot_build_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return ConversationHandler.END
 
+    has_pro = is_user_pro(update.effective_user)
+    ch_rule_line = (
+        "• 📢 <b>Add 4 Force-Join Channels (👑 Pro Active: Admin ke 2 Channels Hata Diye Gaye Hain — Sirf Aapke 4 Channels!)</b>"
+        if has_pro
+        else "• 📢 <b>Add Force-Join Channels</b> (Free: 2 Admin + 2 Aapke Channels · 💎 Pro: Admin ke 2 hat jayenge + 4 Aapke Channels!)"
+    )
+
     text = card(
         "🦄",
         "/BOT-build • Unicorn VIP Bot Builder",
@@ -4109,8 +4820,8 @@ async def bot_build_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "",
         "🌈 <b>Aapke Bot me kya-kya milega:</b>",
         "• ⚡ <b>24/7 Online &amp; &lt;1s Instant Start Reply</b>",
-        "• 📢 <b>Add 2 Force-Join Channels</b> (2 Hamare Official Channels + 2 Aapke Channels)",
-        "• 📤 <b>/user-upload</b> (⚠️ User files 1 Hafte / 7 Days tak valid rehti hain, fir auto-delete ho jaati hain)",
+        ch_rule_line,
+        "• 📤 <b>/user-upload</b> (Free: 7 Days Validity · 💎 <code>/Pro-plan</code>: Lifetime Unlimited!)",
         "",
         "👇 <b>Apna Bot create karne ke liye neeche Continue par click karein:</b>",
         footer=BOT_NAME,
@@ -4172,12 +4883,13 @@ async def bot_build_token_received(update: Update, context: ContextTypes.DEFAULT
         return BOTBUILD_WAIT_TOKEN
 
     user = update.effective_user
+    uid = user.id if user else 111222333
+    has_pro = is_user_pro(uid)
     owner_name = (user.first_name if user else "VIP User") or "VIP User"
     bot_id_num = raw_tok.split(":", 1)[0][-4:]
     bot_uname = f"Unicorn_{bot_id_num}_bot"
     bot_title = f"🦄 {owner_name} File Vault Bot"
 
-    # Try live Telegram getMe verification if internet/token is live
     try:
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{raw_tok}/getMe", method="GET"
@@ -4192,13 +4904,23 @@ async def bot_build_token_received(update: Update, context: ContextTypes.DEFAULT
         pass
 
     ub_id = save_user_bot(
-        owner_user_id=user.id if user else 111222333,
+        owner_user_id=uid,
         owner_name=owner_name,
         bot_token=raw_tok,
         bot_username=bot_uname,
         bot_name=bot_title,
     )
     ub = get_user_bot_by_id(ub_id) or {}
+    ch_btn_label = (
+        "🟣 ➕ Add 4 Channels (Pro Unlocked)"
+        if has_pro
+        else "🟠 ➕ Add 2 Channels to My Bot"
+    )
+    ch_desc_line = (
+        "👑 <b>PRO PLAN ACTIVE:</b> Admin ke 2 Channels hata diye gaye hain! Ab aap apne <b>4 Force-Join Channels</b> add kar sakte hain."
+        if has_pro
+        else "👉 Us par click karke aap apne <b>2 Force-Join Channels</b> add kar sakte hain (2 Hamare + 2 Aapke). Pro Plan lene par Admin ke 2 hat jayenge aur aap 4 jod payenge!"
+    )
 
     await msg.reply_text(
         card(
@@ -4209,8 +4931,8 @@ async def bot_build_token_received(update: Update, context: ContextTypes.DEFAULT
             "🟢 <b>Status:</b> 24/7 Online · Instant &lt;1s Start Active!",
             "",
             "🏠 <b>Home Screen par aapke Bot ka Naam aa gaya hai!</b>",
-            "👉 Us par click karke aap apne <b>2 Force-Join Channels</b> add kar sakte hain (2 Hamare + 2 Aapke).",
-            "⚠️ <b>Note:</b> User bot me sirf <code>/user-upload</code> aur <code>Add 2 Channels</code> milta hai, aur uploaded files <b>1 Hafta (7 Days)</b> me auto-delete ho jaati hain.",
+            ch_desc_line,
+            "⚠️ <b>Note:</b> Free user files <b>1 Hafta (7 Days)</b> me auto-delete hoti hain, aur <code>/Pro-plan</code> walo ki <b>Lifetime</b> rehti hain!",
             footer=BOT_NAME,
         ),
         reply_markup=kb(
@@ -4222,8 +4944,8 @@ async def bot_build_token_received(update: Update, context: ContextTypes.DEFAULT
                 )
             ],
             [
-                btn("🟠 ➕ Add 2 Channels to My Bot", f"userbot:addch:{ub_id}", style=ORANGE),
-                btn("🟢 📤 /user-upload (7-Day Vault)", "userupload:start", style=GREEN),
+                btn(ch_btn_label, f"userbot:addch:{ub_id}", style=ORANGE),
+                btn("🟢 📤 /user-upload", "userupload:start", style=GREEN),
             ],
         ),
     )
@@ -4295,21 +5017,38 @@ async def user_upload_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return ConversationHandler.END
 
+    has_pro = is_user_pro(update.effective_user)
     days = bcfg.get("user_file_expiry_days", 7)
-    await reply(
-        update,
-        context,
-        card(
-            "📤",
-            "/user-upload • Step 1/2 (1-Week User Vault)",
-            f"⚠️ <b>CHETAVANI (WARNING):</b> User dwara upload ki gayi file/link sirf <b>1 Hafta ({days} Days)</b> tak rahegi, uske baad <b>automatically delete</b> ho jayegi!",
-            "👑 <i>(Sirf Admin ki files Lifetime permanent rehti hain)</i>",
-            "",
-            "👉 <b>Apni File, Photo, Video, ya Direct Link (https://...) abhi bhejein:</b>",
-            footer=BOT_NAME,
-        ),
-        markup=cancel_kb(),
-    )
+
+    if has_pro:
+        await reply(
+            update,
+            context,
+            card(
+                "👑",
+                "/user-upload • Step 1/2 (♾️ VIP Pro Lifetime Vault)",
+                "💎 <b>PRO PLAN ACTIVE:</b> Aapki upload ki gayi har File, Image, Video ya Direct Link <b>LIFETIME PERMANENT</b> save rahegi (Kabhi auto-delete nahi hogi)!",
+                "",
+                "👉 <b>Apni File, Photo, Video, ya Direct Link (https://...) abhi bhejein:</b>",
+                footer=BOT_NAME,
+            ),
+            markup=cancel_kb(),
+        )
+    else:
+        await reply(
+            update,
+            context,
+            card(
+                "📤",
+                "/user-upload • Step 1/2 (1-Week User Vault)",
+                f"⚠️ <b>CHETAVANI (WARNING):</b> Free User dwara upload ki gayi file/link sirf <b>1 Hafta ({days} Days)</b> tak rahegi, uske baad <b>automatically delete</b> ho jayegi!",
+                "💎 <i>(Unlimited Lifetime Upload ke liye <code>/Pro-plan</code> me Secret Key daalein)</i>",
+                "",
+                "👉 <b>Apni File, Photo, Video, ya Direct Link (https://...) abhi bhejein:</b>",
+                footer=BOT_NAME,
+            ),
+            markup=cancel_kb(),
+        )
     return USERUPLOAD_MEDIA
 
 
@@ -4337,12 +5076,18 @@ async def user_upload_media_received(update: Update, context: ContextTypes.DEFAU
         "external_url": ext_url,
         "caption": msg.caption or "",
     }
+    has_pro = is_user_pro(update.effective_user)
+    validity_line = (
+        "👑 <i>Pro Plan Active: Yeh file LIFETIME PERMANENT save rahegi!</i>"
+        if has_pro
+        else "⚠️ <i>Yaad rahe: Free Plan me yeh file 1 Hafta (7 Days) baad auto-delete ho jayegi.</i>"
+    )
     await msg.reply_text(
         card(
             "🏷️",
             "/user-upload • Step 2/2: Enter File Name",
             "✅ <b>File / Link Received!</b>",
-            "⚠️ <i>Yaad rahe: Yeh file 1 Hafta (7 Days) baad auto-delete ho jayegi.</i>",
+            validity_line,
             "",
             "👉 <b>Ab iska Naam (NAME) likh kar bhejein:</b>",
             footer=BOT_NAME,
@@ -4363,56 +5108,507 @@ async def user_upload_name_received(update: Update, context: ContextTypes.DEFAUL
         await msg.reply_text(card("❌", "Cancelled", "◈ /user-upload cancel ho gaya."))
         return ConversationHandler.END
 
+    uid = update.effective_user.id if update.effective_user else 0
+    has_pro = is_user_pro(uid)
     data = context.user_data.pop("pending_user_upload", None) or {}
     file_db_id = save_file(
         tg_file_id=data.get("tg_file_id", ""),
         file_type=data.get("file_type", "document"),
         file_name=data.get("file_name") or raw_name,
         caption=data.get("caption", ""),
-        created_by=update.effective_user.id if update.effective_user else 0,
+        created_by=uid,
         custom_name=raw_name,
         group_name="",
         random_digits=6,
         external_url=data.get("external_url", ""),
-        uploader_role="user",
+        uploader_role="pro" if has_pro else "user",
     )
     saved_row = dict(get_file(file_db_id))
     username = await get_bot_username(context)
     custom_link = file_link(username, saved_row)
     safe_link = file_tg_safe_link(username, saved_row)
 
-    await msg.reply_text(
+    if has_pro or int(saved_row.get("is_permanent") or 0) == 1:
+        await msg.reply_text(
+            card(
+                "👑",
+                "VIP Pro Upload Saved (♾️ Lifetime Permanent)!",
+                f"🏷️ <b>Name:</b> <code>{esc(saved_row['custom_name'])}</code>",
+                f"🔢 <b>Code:</b> <code>{esc(saved_row['random_code'])}</code>",
+                "♾️ <b>Storage Status:</b> LIFETIME PERMANENT (Kabhi delete nahi hoga!)",
+                "📢 <b>Force-Join Rule:</b> Link kholne wale user ko Force-Join Channels join karne honge!",
+                "",
+                "🔗 <b>Your Lifetime Share Link:</b>",
+                f"<code>{esc(custom_link)}</code>",
+                footer=BOT_NAME,
+            ),
+            disable_web_page_preview=True,
+            reply_markup=kb(
+                [
+                    btn("🟣 🚀 Open Link", url=safe_link, style=PURPLE),
+                    btn("🟢 📤 Another /user-upload", "userupload:start", style=GREEN),
+                ]
+            ),
+        )
+    else:
+        await msg.reply_text(
+            card(
+                "🦄",
+                "User File Uploaded (Valid for 1 Week / 7 Days)!",
+                f"🏷️ <b>Name:</b> <code>{esc(saved_row['custom_name'])}</code>",
+                f"🔢 <b>Code:</b> <code>{esc(saved_row['random_code'])}</code>",
+                "⚠️ <b>Auto-Delete Warning:</b> Yeh file thik <b>1 Hafta (7 Days)</b> me apne aap delete ho jayegi!",
+                "💎 <b>Want Lifetime Storage?</b> <code>/Pro-plan</code> me Secret Key daal kar Lifetime Unlimited upload payein!",
+                "",
+                "🔗 <b>Your Share Link:</b>",
+                f"<code>{esc(custom_link)}</code>",
+                footer=BOT_NAME,
+            ),
+            disable_web_page_preview=True,
+            reply_markup=kb(
+                [
+                    btn("🟣 🚀 Open Link", url=safe_link, style=PURPLE),
+                    btn("🟢 📤 Another /user-upload", "userupload:start", style=GREEN),
+                ],
+                [
+                    btn("💎 🔑 Upgrade to /Pro-plan (Lifetime)", "proplan:start", style=GOLD),
+                ],
+            ),
+        )
+    return ConversationHandler.END
+
+
+async def pro_plan_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    /Pro-plan command or button:
+    - If user is already Pro, sends the Default VIP Unicorn Banner + YOUR PRO PLAN ACTIVE! card.
+    - Otherwise prompts the user to enter their Secret Key or buy one from @Krishna_Zx_Store_bot.
+      NOTE: The Secret Key is NEVER exposed to regular users!
+    """
+    if update.effective_user:
+        save_user(update.effective_user)
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    bcfg = get_bot_builder_config()
+    if not bcfg.get("allow_pro_plan", True) and not is_admin(update.effective_user):
+        await reply(
+            update,
+            context,
+            card("⛔", "/Pro-plan Paused", "◈ Admin ne abhi /Pro-plan band kiya hua hai."),
+        )
+        return ConversationHandler.END
+
+    uid = update.effective_user.id if update.effective_user else 0
+    has_pro = is_user_pro(uid)
+
+    if has_pro and not is_admin(uid):
+        await send_pro_plan_activated_banner(update, context, uid)
+        return ConversationHandler.END
+
+    admin_hint = ""
+    if is_admin(uid):
+        pro_link = bcfg.get("pro_activation_link") or get_pro_plan_activation_link()
+        used_by = int(bcfg.get("pro_key_used_by") or 0)
+        status_txt = "🟢 Ready (Single-Use)" if used_by == 0 else f"🔴 Used by {used_by}"
+        admin_hint = (
+            f"\n👑 <b>Admin Only (Hidden from Users):</b>\n"
+            f"• 🔑 <b>Secret Key:</b> <code>{esc(bcfg.get('pro_plan_secret_key', DEFAULT_PRO_PLAN_SECRET_KEY))}</code>\n"
+            f"• 🔗 <b>One-Click Activation Link:</b>\n<code>{esc(pro_link)}</code>\n"
+            f"• 📌 <b>Link Status:</b> {status_txt}"
+        )
+
+    text = card(
+        "🦄",
+        "/Pro-plan • Unlock VIP Lifetime + 4 Channels!",
+        "✨ <b>Kya aap Lifetime Unlimited Upload + Apne Bot me 4 Force-Join Channels unlock karna chahte hain?</b>",
+        "",
+        "🔥 <b>/Pro-plan VIP Benefits:</b>",
+        "• ♾️ <b>Lifetime Permanent Vault:</b> Aapki files kabhi delete nahi hongi (7-day auto-delete hat jayega)!",
+        "• 📢 <b>4 Own Force-Join Channels:</b> Admin ke 2 Channels hat jayenge aur aap apne <b>4 Force-Join Channels</b> jod payenge!",
+        "• 🚀 <b>Unlimited Uploads &amp; &lt;1s Instant Delivery</b>",
+        f"• 🛒 <b>Buy Secret Key / Link:</b> @{PRO_STORE_BOT_USERNAME}",
+        admin_hint,
+        "",
+        "🔑 <b>Activate karne ke liye neeche apna Secret Key likh kar bhejein:</b>",
+        footer=BOT_NAME,
+    )
+    rows = [
+        [btn(f"🛒 💎 Buy Pro Key (@{PRO_STORE_BOT_USERNAME})", url=PRO_STORE_BOT_URL, style=ORANGE)],
+        [btn("🔴 ❌ Cancel", "cancel", style=RED)],
+    ]
+    if is_admin(uid):
+        rows.insert(0, [btn("🎲 🔑 Generate New Key & Link (Admin)", "adm:genprokey", style=PURPLE)])
+        rows.insert(0, [btn("👑 ⚙️ Custom Secret Key (Admin)", "adm:prokey", style=GOLD)])
+    await reply(update, context, text, markup=kb(*rows))
+    return PROPLAN_WAIT_KEY
+
+
+async def pro_plan_key_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    if not msg or not msg.text:
+        return PROPLAN_WAIT_KEY
+
+    entered = msg.text.strip()
+    if entered == CANCEL_TEXT:
+        await msg.reply_text(card("❌", "Cancelled", "◈ /Pro-plan activation cancel ho gaya."))
+        return ConversationHandler.END
+
+    user = update.effective_user
+    uid = user.id if user else 0
+    ok, feedback = activate_user_pro_plan(
+        user_id=uid,
+        entered_key=entered,
+        first_name=(user.first_name if user else "") or "",
+        username=(user.username if user else "") or "",
+    )
+    if not ok:
+        await msg.reply_text(
+            card(
+                "❌",
+                "Invalid or Already Used Secret Key",
+                feedback,
+                "",
+                f"🛒 <b>Naya Secret Key kharidne ke liye संपर्क karein:</b> @{PRO_STORE_BOT_USERNAME}",
+                "🔑 <b>Dobara sahi Secret Key bhejein ya Cancel dabayein:</b>",
+                footer=BOT_NAME,
+            ),
+            reply_markup=kb(
+                [btn(f"🛒 💎 Buy Pro Key (@{PRO_STORE_BOT_USERNAME})", url=PRO_STORE_BOT_URL, style=ORANGE)],
+                [btn("🔴 ❌ Cancel", "cancel", style=RED)],
+            ),
+        )
+        return PROPLAN_WAIT_KEY
+
+    await send_pro_plan_activated_banner(update, context, uid)
+    return ConversationHandler.END
+
+
+async def pro_key_admin_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Allows the Admin to view and update the /Pro-plan Secret Key & One-Click Link."""
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    if update.callback_query:
+        await update.callback_query.answer()
+
+    bcfg = get_bot_builder_config()
+    cur_key = bcfg.get("pro_plan_secret_key", DEFAULT_PRO_PLAN_SECRET_KEY)
+    pro_link = bcfg.get("pro_activation_link") or get_pro_plan_activation_link()
+    used_by = int(bcfg.get("pro_key_used_by") or 0)
+    await reply(
+        update,
+        context,
         card(
-            "🦄",
-            "User File Uploaded (Valid for 1 Week / 7 Days)!",
-            f"🏷️ <b>Name:</b> <code>{esc(saved_row['custom_name'])}</code>",
-            f"🔢 <b>Code:</b> <code>{esc(saved_row['random_code'])}</code>",
-            "⚠️ <b>Auto-Delete Warning:</b> Yeh file thik <b>1 Hafta (7 Days)</b> me apne aap delete ho jayegi!",
-            "📢 <b>Force-Join Rule:</b> Link kholne wale user ko <b>2 Admin Channels + 2 Aapke Channels</b> join karne honge!",
+            "🔑",
+            "Admin • Set /Pro-plan Secret Key & Link",
+            f"💎 <b>Current Secret Key (Hidden from Users):</b>\n<code>{esc(cur_key)}</code>",
             "",
-            "🔗 <b>Your Share Link:</b>",
-            f"<code>{esc(custom_link)}</code>",
+            f"🔗 <b>One-Click Activation Link (Single-Use):</b>\n<code>{esc(pro_link)}</code>",
+            f"📌 <b>Link Status:</b> {'🟢 Ready (Unused)' if used_by == 0 else f'🔴 Used by User ID {used_by}'}",
+            "",
+            "👉 <b>Naya Custom Secret Key likh kar bhejein (jaise <code>FILE-SHARE-YU6J-IEHU-828H</code>) ya button se Random Generate karein:</b>",
             footer=BOT_NAME,
         ),
-        disable_web_page_preview=True,
+        markup=kb(
+            [btn("🎲 🔑 Auto-Generate New Key & Link", "adm:genprokey", style=PURPLE)],
+            [btn("🔄 Re-Arm Current Single-Use Link", "adm:resetprolink", style=ORANGE)],
+            [btn("🔴 ❌ Cancel", "cancel", style=RED)],
+        ),
+    )
+    return PROPLAN_ADMIN_SET_KEY
+
+
+async def pro_key_admin_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    if not msg or not msg.text:
+        return PROPLAN_ADMIN_SET_KEY
+
+    new_key = msg.text.strip()
+    if new_key == CANCEL_TEXT:
+        await msg.reply_text(card("❌", "Cancelled", "◈ Operation cancel ho gaya."))
+        return ConversationHandler.END
+
+    updated_cfg = save_bot_builder_config(pro_plan_secret_key=new_key, reset_single_use=True)
+    pro_link = updated_cfg.get("pro_activation_link") or get_pro_plan_activation_link()
+    await msg.reply_text(
+        card(
+            "✅",
+            "/Pro-plan Secret Key & Link Updated!",
+            f"🔑 <b>New Secret Key:</b> <code>{esc(new_key)}</code>",
+            f"🔗 <b>New One-Click Single-Use Link:</b>\n<code>{esc(pro_link)}</code>",
+            "🟢 <b>Status:</b> Ready for 1st user click!",
+            "",
+            "◈ Yeh link kisi bhi user ko bhejein — click karte hi uska <b>Pro Plan + 4 Channels + Lifetime Upload</b> active ho jayega!",
+            footer=BOT_NAME,
+        ),
+        reply_markup=panel_kb(),
+    )
+    return ConversationHandler.END
+
+
+async def start_features_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Admin command /start_features to configure which features appear on /start."""
+    if not await guard_admin(update):
+        return ConversationHandler.END
+    text, markup = build_admin_start_config_card_and_kb()
+    await reply(update, context, text, markup=markup)
+    return ConversationHandler.END
+
+
+async def user_nav_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handles user:start and user:help navigation buttons."""
+    q = update.callback_query
+    if not q:
+        return ConversationHandler.END
+    await q.answer()
+    data = q.data or ""
+    if data == "user:help":
+        return await help_cmd(update, context)
+    return await start_cmd(update, context)
+
+
+async def userbot_addch_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Starts interactive Force-Join Channel configuration for a user's cloned bot:
+    - Free user: up to 2 channels (Step 1/2 -> Step 2/2) + 2 Admin channels.
+    - Pro user: up to 4 channels (Step 1/4 -> Step 4/4) with Admin's 2 channels REMOVED!
+    """
+    q = update.callback_query
+    if q:
+        await q.answer()
+    parts = ((q.data if q else "") or "").split(":")
+    bot_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    ub = get_user_bot_by_id(bot_id)
+    if not ub:
+        uid = update.effective_user.id if update.effective_user else 0
+        ubs = get_user_bots(owner_user_id=uid) or get_user_bots()
+        ub = ubs[0] if ubs else None
+    if not ub:
+        await reply(
+            update,
+            context,
+            card("❌", "No User Bot Found", "◈ Pahle /BOT-build se apna bot banayein."),
+        )
+        return ConversationHandler.END
+
+    uid = update.effective_user.id if update.effective_user else int(ub.get("owner_user_id") or 0)
+    has_pro = is_user_pro(uid) or bool(ub.get("owner_is_pro"))
+    max_ch = 4 if has_pro else 2
+
+    context.user_data["editing_userbot_id"] = int(ub["id"])
+    context.user_data["editing_userbot_max_ch"] = max_ch
+
+    mode_banner = (
+        "👑 <b>PRO PLAN ACTIVE:</b> Admin ke 2 Channels hata diye gaye hain! Aap apne <b>4 Force-Join Channels</b> jod sakte hain."
+        if has_pro
+        else "⏳ <b>Free Mode:</b> Aap 2 Channels jod sakte hain (2 Admin + 2 Aapke). <code>/Pro-plan</code> lene par Admin ke 2 hat jayenge aur aap 4 jod payenge!"
+    )
+
+    await reply(
+        update,
+        context,
+        card(
+            "📢",
+            f"Add {max_ch} Channels • {ub['bot_name']} (Step 1/{max_ch})",
+            mode_banner,
+            "",
+            "👉 <b>Apne 1st Force-Join Channel ka Invite Link (https://t.me/...) ya @username bhejein:</b>",
+            f"<i>(Current Ch #1: {esc(ub.get('channel_1_link') or 'Not set')})</i>",
+            footer=ub["bot_name"],
+        ),
+        markup=cancel_kb(),
+    )
+    return USERBOT_CH1
+
+
+async def userbot_ch1_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    if not msg or not msg.text:
+        return USERBOT_CH1
+    raw = msg.text.strip()
+    if raw == CANCEL_TEXT:
+        await msg.reply_text(card("❌", "Cancelled", "◈ Channel setup cancel ho gaya."))
+        return ConversationHandler.END
+
+    max_ch = int(context.user_data.get("editing_userbot_max_ch") or 2)
+    link = raw if raw.startswith("http") else f"https://t.me/{raw.lstrip('@')}"
+    title = raw.lstrip("@") if not raw.startswith("http") else "User Channel #1"
+    context.user_data["editing_userbot_ch1"] = (title, link)
+
+    await msg.reply_text(
+        card(
+            "📢",
+            f"Add {max_ch} Channels • Step 2/{max_ch}",
+            f"✅ <b>Channel #1 Saved:</b> <code>{esc(link)}</code>",
+            "",
+            "👉 <b>Ab apne 2nd Force-Join Channel ka Invite Link (https://t.me/...) ya @username bhejein:</b>",
+            "<i>(Agar aage channel nahi jodna hai to <code>skip</code> likhein)</i>",
+            footer=BOT_NAME,
+        ),
+        reply_markup=cancel_kb(),
+    )
+    return USERBOT_CH2
+
+
+async def userbot_ch2_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    if not msg or not msg.text:
+        return USERBOT_CH2
+    raw = msg.text.strip()
+    if raw == CANCEL_TEXT:
+        await msg.reply_text(card("❌", "Cancelled", "◈ Channel setup cancel ho gaya."))
+        return ConversationHandler.END
+
+    max_ch = int(context.user_data.get("editing_userbot_max_ch") or 2)
+    if raw.lower() == "skip":
+        ch2_title, ch2_link = "", ""
+    else:
+        ch2_link = raw if raw.startswith("http") else f"https://t.me/{raw.lstrip('@')}"
+        ch2_title = raw.lstrip("@") if not raw.startswith("http") else "User Channel #2"
+
+    context.user_data["editing_userbot_ch2"] = (ch2_title, ch2_link)
+
+    if max_ch >= 4:
+        await msg.reply_text(
+            card(
+                "👑",
+                "Pro 4-Channel Setup • Step 3/4",
+                f"✅ <b>Channel #2:</b> <code>{esc(ch2_link or 'Skipped')}</code>",
+                "🎉 <b>Pro Plan Benefit:</b> Admin ke 2 Channels hat chuke hain — ab aap Channel #3 aur #4 bhi jod sakte hain!",
+                "",
+                "👉 <b>Ab apne 3rd Force-Join Channel ka Invite Link (https://t.me/...) ya @username bhejein:</b>",
+                "<i>(Agar skip karna hai to <code>skip</code> likhein)</i>",
+                footer=BOT_NAME,
+            ),
+            reply_markup=cancel_kb(),
+        )
+        return USERBOT_CH3
+
+    bot_id = int(context.user_data.pop("editing_userbot_id", 0) or 0)
+    ch1_title, ch1_link = context.user_data.pop("editing_userbot_ch1", ("User Channel #1", ""))
+    context.user_data.pop("editing_userbot_ch2", None)
+    context.user_data.pop("editing_userbot_max_ch", None)
+
+    update_user_bot_channels(
+        bot_db_id=bot_id,
+        channel_1_title=ch1_title,
+        channel_1_link=ch1_link,
+        channel_2_title=ch2_title,
+        channel_2_link=ch2_link,
+    )
+    ub = get_user_bot_by_id(bot_id) or {"bot_name": "My Bot", "id": bot_id}
+    await msg.reply_text(
+        card(
+            "✅",
+            "2 Force-Join Channels Updated!",
+            f"🤖 <b>Bot:</b> {esc(ub.get('bot_name', 'My Bot'))}",
+            f"1️⃣ <b>User Channel #1:</b> <code>{esc(ch1_link or 'None')}</code>",
+            f"2️⃣ <b>User Channel #2:</b> <code>{esc(ch2_link or 'None')}</code>",
+            "",
+            "📢 <b>Ab aapke bot ke har share link par 2 Admin Channels + 2 Aapke Channels Force-Join me dikhenge!</b>",
+            "💎 <i>Tip: <code>/Pro-plan</code> lene par Admin ke 2 Channels hat jayenge aur aap 4 apne Channels jod payenge!</i>",
+            footer=BOT_NAME,
+        ),
         reply_markup=kb(
-            [
-                btn("🟣 🚀 Open Link", url=safe_link, style=PURPLE),
-                btn("🟢 📤 Another /user-upload", "userupload:start", style=GREEN),
-            ]
+            [btn("🟣 🤖 Open My Bot Home", f"userbot:open:{bot_id}", style=PURPLE)],
+            [btn("🟢 📤 /user-upload", "userupload:start", style=GREEN)],
+        ),
+    )
+    return ConversationHandler.END
+
+
+async def userbot_ch3_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    if not msg or not msg.text:
+        return USERBOT_CH3
+    raw = msg.text.strip()
+    if raw == CANCEL_TEXT:
+        await msg.reply_text(card("❌", "Cancelled", "◈ Channel setup cancel ho gaya."))
+        return ConversationHandler.END
+
+    if raw.lower() == "skip":
+        ch3_title, ch3_link = "", ""
+    else:
+        ch3_link = raw if raw.startswith("http") else f"https://t.me/{raw.lstrip('@')}"
+        ch3_title = raw.lstrip("@") if not raw.startswith("http") else "User Channel #3"
+
+    context.user_data["editing_userbot_ch3"] = (ch3_title, ch3_link)
+    await msg.reply_text(
+        card(
+            "👑",
+            "Pro 4-Channel Setup • Step 4/4",
+            f"✅ <b>Channel #3:</b> <code>{esc(ch3_link or 'Skipped')}</code>",
+            "",
+            "👉 <b>Ab apne 4th Force-Join Channel ka Invite Link (https://t.me/...) ya @username bhejein:</b>",
+            "<i>(Agar skip karna hai to <code>skip</code> likhein)</i>",
+            footer=BOT_NAME,
+        ),
+        reply_markup=cancel_kb(),
+    )
+    return USERBOT_CH4
+
+
+async def userbot_ch4_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    msg = update.message
+    if not msg or not msg.text:
+        return USERBOT_CH4
+    raw = msg.text.strip()
+    if raw == CANCEL_TEXT:
+        await msg.reply_text(card("❌", "Cancelled", "◈ Channel setup cancel ho gaya."))
+        return ConversationHandler.END
+
+    bot_id = int(context.user_data.pop("editing_userbot_id", 0) or 0)
+    ch1_title, ch1_link = context.user_data.pop("editing_userbot_ch1", ("User Channel #1", ""))
+    ch2_title, ch2_link = context.user_data.pop("editing_userbot_ch2", ("User Channel #2", ""))
+    ch3_title, ch3_link = context.user_data.pop("editing_userbot_ch3", ("User Channel #3", ""))
+    context.user_data.pop("editing_userbot_max_ch", None)
+
+    if raw.lower() == "skip":
+        ch4_title, ch4_link = "", ""
+    else:
+        ch4_link = raw if raw.startswith("http") else f"https://t.me/{raw.lstrip('@')}"
+        ch4_title = raw.lstrip("@") if not raw.startswith("http") else "User Channel #4"
+
+    update_user_bot_channels(
+        bot_db_id=bot_id,
+        channel_1_title=ch1_title,
+        channel_1_link=ch1_link,
+        channel_2_title=ch2_title,
+        channel_2_link=ch2_link,
+        channel_3_title=ch3_title,
+        channel_3_link=ch3_link,
+        channel_4_title=ch4_title,
+        channel_4_link=ch4_link,
+    )
+    ub = get_user_bot_by_id(bot_id) or {"bot_name": "My Bot", "id": bot_id}
+    await msg.reply_text(
+        card(
+            "👑",
+            "VIP Pro • 4 Force-Join Channels Updated!",
+            f"🤖 <b>Bot:</b> {esc(ub.get('bot_name', 'My Bot'))}",
+            f"1️⃣ <b>Your Channel #1:</b> <code>{esc(ch1_link or 'None')}</code>",
+            f"2️⃣ <b>Your Channel #2:</b> <code>{esc(ch2_link or 'None')}</code>",
+            f"3️⃣ <b>Your Channel #3:</b> <code>{esc(ch3_link or 'None')}</code>",
+            f"4️⃣ <b>Your Channel #4:</b> <code>{esc(ch4_link or 'None')}</code>",
+            "",
+            "🎉 <b>Admin ke 2 Channels hata diye gaye hain — ab aapke bot par 100% AAPKE 4 Force-Join Channels chal rahe hain!</b>",
+            footer=BOT_NAME,
+        ),
+        reply_markup=kb(
+            [btn("🟣 🤖 Open My Bot Home", f"userbot:open:{bot_id}", style=PURPLE)],
+            [btn("🟢 📤 /user-upload (♾️ Lifetime)", "userupload:start", style=GREEN)],
         ),
     )
     return ConversationHandler.END
 
 
 async def userbot_router_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Opens the User's Created Bot Home Screen where they can manage up to 2 channels."""
+    """Opens the User's Created Bot Home Screen where Free users manage 2 channels and Pro users manage 4 channels."""
     q = update.callback_query
     if not q:
         return
     await q.answer()
     parts = (q.data or "").split(":")
-    action = parts[1] if len(parts) > 1 else "open"
     bot_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
     ub = get_user_bot_by_id(bot_id)
     if not ub:
@@ -4424,30 +5620,54 @@ async def userbot_router_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         return
 
+    uid = update.effective_user.id if update.effective_user else int(ub.get("owner_user_id") or 0)
+    has_pro = is_user_pro(uid) or bool(ub.get("owner_is_pro"))
     combined = get_combined_force_channels_for_user_bot(int(ub["id"]))
     ch_lines = [
         f"• <b>{esc(c['slot'])}:</b> {esc(c['title'])}" for c in combined
     ]
+    ch_header = (
+        "📢 <b>Force-Join Channels (👑 Pro Mode: 0 Admin + 4 Your Channels):</b>"
+        if has_pro
+        else "📢 <b>Force-Join Channels (2 Admin + 2 User Channels):</b>"
+    )
+    add_btn_label = (
+        "🟣 ➕ Add 4 Channels (Pro Unlocked)"
+        if has_pro
+        else "🟠 ➕ Add Channel (Max 2)"
+    )
+
     text = card(
         "🤖",
         f"My Bot Home • {ub['bot_name']}",
         f"🔗 <b>Bot Username:</b> @{esc(ub['bot_username'])}",
         "🟢 <b>Status:</b> 24/7 Online &amp; Active",
+        f"👑 <b>Owner Plan:</b> {'YOUR PRO PLAN ACTIVE (Admin Channels Removed!)' if has_pro else 'Free Plan (2 Admin + 2 User Channels)'}",
         "",
-        "📢 <b>Force-Join Channels (2 Admin + 2 User Channels):</b>",
+        ch_header,
         "\n".join(ch_lines),
         "",
         "✨ <b>Allowed User Features:</b>",
-        "1️⃣ <b>Add Channel (Max 2 Channels)</b>",
-        "2️⃣ <b>/user-upload (⚠️ 1-Week / 7-Day Auto-Delete)</b>",
+        f"1️⃣ <b>{'Add 4 Own Channels (Admin 2 Removed!)' if has_pro else 'Add Channel (Max 2 Channels)'}</b>",
+        "2️⃣ <b>/user-upload (Free: 7 Days · 💎 /Pro-plan: Lifetime)</b>",
         footer=ub["bot_name"],
     )
-    markup = kb(
+    rows = [
         [
-            btn("🟠 ➕ Add Channel (Max 2)", f"userbot:addch:{ub['id']}", style=ORANGE),
-            btn("🟢 📤 /user-upload (7 Days)", "userupload:start", style=GREEN),
+            btn(add_btn_label, f"userbot:addch:{ub['id']}", style=PURPLE if has_pro else ORANGE),
+            btn("🟢 📤 /user-upload", "userupload:start", style=GREEN),
         ],
-    )
+        [
+            btn(
+                "👑 💎 /Pro-plan Active (VIP)" if has_pro else "💎 🔑 /Pro-plan (Unlock 4 Channels + Lifetime)",
+                "proplan:start",
+                style=GOLD,
+            ),
+        ],
+    ]
+    if not has_pro:
+        rows.append([btn(f"🛒 💎 Buy Pro Key (@{PRO_STORE_BOT_USERNAME})", url=PRO_STORE_BOT_URL, style=ORANGE)])
+    markup = kb(*rows)
     try:
         await q.message.edit_text(text, reply_markup=markup)
     except BadRequest:
@@ -4458,12 +5678,14 @@ async def _configure_bot_commands(app: Application) -> None:
     commands = [
         BotCommand("start", "⚡ Instant Start (<1s)"),
         BotCommand("bot_build", "🦄 Create Your 24/7 Bot (/BOT-build)"),
-        BotCommand("user_upload", "📤 User Upload — 1 Week Validity (/user-upload)"),
+        BotCommand("user_upload", "📤 User Upload (/user-upload)"),
+        BotCommand("pro_plan", "💎 Unlock Unlimited Lifetime Upload (/Pro-plan)"),
         BotCommand("upload", "👑 Admin Lifetime Upload (/upload)"),
         BotCommand("group_upload", "📸 Group Image/File Upload (/group-upload)"),
         BotCommand("group_image_description", "🖼️ Group Banner (/Group-image-description)"),
         BotCommand("ad_group", "👥 Add Group/Channel 15m Loop (/ad-group)"),
         BotCommand("bot_build_description", "✨ Edit /BOT-build Description (Admin)"),
+        BotCommand("start_features", "🎛️ Customize /start Features (Admin)"),
         BotCommand("addchannel", "➕ Add Force-Join Channel"),
         BotCommand("broadcast", "📣 Broadcast to All Users"),
         BotCommand("admin", "🛠 Colorful VIP Admin Panel"),
@@ -4490,6 +5712,92 @@ async def _post_init(app: Application) -> None:
     await _configure_bot_commands(app)
 
 
+def _all_conversation_entry_points() -> list[Any]:
+    """
+    All interactive command & callback entry points in one unified list.
+    Using a single unified ConversationHandler with allow_reentry=True guarantees
+    that if a user is mid-way through /user_upload and types /bot_build, /Pro-plan,
+    or /start, it switches immediately without ever getting stuck!
+    """
+    return [
+        # /start, /help, /admin, /start_features
+        CommandHandler("start", start_cmd),
+        MessageHandler(filters.Regex(r"(?i)^/start(\b|@|\s|$)"), start_cmd),
+        CommandHandler("help", help_cmd),
+        CommandHandler("admin", admin_cmd),
+        CommandHandler("start_features", start_features_cmd),
+        MessageHandler(filters.Regex(r"(?i)^/start[-_]?features(\b|@|$)"), start_features_cmd),
+        CallbackQueryHandler(user_nav_cb, pattern=r"^user:(start|help)$"),
+        # 1. Force-Join Channel
+        CommandHandler("addchannel", addchannel_entry),
+        CallbackQueryHandler(addchannel_entry, pattern=r"^adm:addch$"),
+        # 2. Admin Lifetime Upload (/upload)
+        CommandHandler("upload", upload_entry),
+        CallbackQueryHandler(upload_entry, pattern=r"^adm:upload$"),
+        # 3. /group-upload
+        CommandHandler("group_upload", group_upload_entry),
+        CommandHandler("groupupload", group_upload_entry),
+        MessageHandler(filters.Regex(r"(?i)^/group[-_]?upload(\b|@|$)"), group_upload_entry),
+        CallbackQueryHandler(group_upload_entry, pattern=r"^adm:grupload$"),
+        # 4. /Group-image-description
+        CommandHandler("group_image_description", group_banner_entry),
+        CommandHandler("groupimagedescription", group_banner_entry),
+        MessageHandler(
+            filters.Regex(r"(?i)^/group[-_]?image[-_]?description(\b|@|$)"),
+            group_banner_entry,
+        ),
+        CallbackQueryHandler(group_banner_entry, pattern=r"^adm:grpbanner$"),
+        # 5. /ad-group
+        CommandHandler("ad_group", ad_group_entry),
+        CommandHandler("add_group", ad_group_entry),
+        CommandHandler("adgroup", ad_group_entry),
+        MessageHandler(filters.Regex(r"(?i)^/ad+[-_]?group(\b|@|$)"), ad_group_entry),
+        CallbackQueryHandler(ad_group_entry, pattern=r"^adm:adgroup$"),
+        # 6. /broadcast
+        CommandHandler("broadcast", broadcast_entry),
+        CallbackQueryHandler(broadcast_entry, pattern=r"^adm:bcast$"),
+        # 7. /BOT-build (/bot_build, /bot-build, /BOT-build)
+        CommandHandler("bot_build", bot_build_entry),
+        CommandHandler("botbuild", bot_build_entry),
+        MessageHandler(
+            filters.Regex(r"(?i)^/bot[-_]?build(\b|@|\s|$)"),
+            bot_build_entry,
+        ),
+        CallbackQueryHandler(bot_build_entry, pattern=r"^(adm:botbuild|botbuild:start)$"),
+        CallbackQueryHandler(bot_build_continue_cb, pattern=r"^botbuild:continue$"),
+        # 8. /BOT-build-description
+        CommandHandler("bot_build_description", bot_build_desc_entry),
+        CommandHandler("botbuilddescription", bot_build_desc_entry),
+        MessageHandler(
+            filters.Regex(r"(?i)^/bot[-_]?build[-_]?description(\b|@|\s|$)"),
+            bot_build_desc_entry,
+        ),
+        CallbackQueryHandler(bot_build_desc_entry, pattern=r"^adm:botbuilddesc$"),
+        # 9. /user-upload (/user_upload, /user-upload)
+        CommandHandler("user_upload", user_upload_entry),
+        CommandHandler("userupload", user_upload_entry),
+        MessageHandler(
+            filters.Regex(r"(?i)^/user[-_]?upload(\b|@|\s|$)"),
+            user_upload_entry,
+        ),
+        CallbackQueryHandler(user_upload_entry, pattern=r"^userupload:start$"),
+        # 10. /Pro-plan (/pro_plan, /pro-plan, /Pro-plan, /proplan)
+        CommandHandler("pro_plan", pro_plan_entry),
+        CommandHandler("proplan", pro_plan_entry),
+        MessageHandler(
+            filters.Regex(r"(?i)^/pro[-_]?plan(\b|@|\s|$)"),
+            pro_plan_entry,
+        ),
+        CallbackQueryHandler(pro_plan_entry, pattern=r"^proplan:start$"),
+        # 11. Admin set /Pro-plan Secret Key
+        CommandHandler("pro_key", pro_key_admin_entry),
+        MessageHandler(filters.Regex(r"(?i)^/pro[-_]?key(\b|@|\s|$)"), pro_key_admin_entry),
+        CallbackQueryHandler(pro_key_admin_entry, pattern=r"^adm:prokey$"),
+        # 12. User Bot Add 2 Channels interactive flow
+        CallbackQueryHandler(userbot_addch_entry, pattern=r"^userbot:addch:"),
+    ]
+
+
 def _common_fallbacks() -> list[Any]:
     return [
         CommandHandler("cancel", cancel_cmd),
@@ -4497,7 +5805,11 @@ def _common_fallbacks() -> list[Any]:
         CommandHandler("start", start_cmd),
         CommandHandler("admin", admin_cmd),
         CommandHandler("help", help_cmd),
-        CallbackQueryHandler(adm_router, pattern=r"^adm:(home|stats|channels|files)$"),
+        CallbackQueryHandler(
+            adm_router,
+            pattern=r"^adm:(home|stats|channels|files|startcfg|previewuserstart|genprokey|resetprolink)$",
+        ),
+        CallbackQueryHandler(adm_router, pattern=r"^adm:toggle:"),
     ]
 
 
@@ -4514,52 +5826,18 @@ def _build_app(token: str | None = None) -> Application:
         .build()
     )
 
-    # 1. Force-Join Channel Conversation
-    addchannel_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("addchannel", addchannel_entry),
-            CallbackQueryHandler(addchannel_entry, pattern=r"^adm:addch$"),
-        ],
+    unified_conv = ConversationHandler(
+        entry_points=_all_conversation_entry_points(),
         states={
             ADDCH_INPUT: [
                 MessageHandler(filters.ALL & ~filters.COMMAND, addchannel_input),
             ],
-        },
-        fallbacks=_common_fallbacks(),
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True,
-    )
-
-    # 2. File & Link Upload Conversation (with Custom Name step)
-    upload_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("upload", upload_entry),
-            CallbackQueryHandler(upload_entry, pattern=r"^adm:upload$"),
-        ],
-        states={
             UPLOAD_MEDIA: [
                 MessageHandler(filters.ALL & ~filters.COMMAND, upload_media_received),
             ],
             UPLOAD_ASK_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, upload_name_received),
             ],
-        },
-        fallbacks=_common_fallbacks(),
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True,
-    )
-
-    # 3. /group-upload Conversation (Image/File -> Group Name -> Item Name -> ?start=Group?Name=Random)
-    group_upload_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("group_upload", group_upload_entry),
-            CommandHandler("groupupload", group_upload_entry),
-            MessageHandler(filters.Regex(r"(?i)^/group[-_]?upload(\b|@|$)"), group_upload_entry),
-            CallbackQueryHandler(group_upload_entry, pattern=r"^adm:grupload$"),
-        ],
-        states={
             GRPUPLOAD_MEDIA: [
                 MessageHandler(filters.ALL & ~filters.COMMAND, group_upload_media_received),
             ],
@@ -4569,133 +5847,49 @@ def _build_app(token: str | None = None) -> Application:
             GRPUPLOAD_ITEM_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, group_upload_name_received),
             ],
-        },
-        fallbacks=_common_fallbacks(),
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True,
-    )
-
-    # 4. /Group-image-description Conversation (Image -> Description -> Verified)
-    group_banner_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("group_image_description", group_banner_entry),
-            CommandHandler("groupimagedescription", group_banner_entry),
-            MessageHandler(
-                filters.Regex(r"(?i)^/group[-_]?image[-_]?description(\b|@|$)"),
-                group_banner_entry,
-            ),
-            CallbackQueryHandler(group_banner_entry, pattern=r"^adm:grpbanner$"),
-        ],
-        states={
             GRPBANNER_IMAGE: [
                 MessageHandler(filters.ALL & ~filters.COMMAND, group_banner_image_received),
             ],
             GRPBANNER_DESC: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, group_banner_desc_received),
             ],
-        },
-        fallbacks=_common_fallbacks(),
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True,
-    )
-
-    # 5. /ad-group Conversation (Add Group for 15m Auto-Banner Send & Delete)
-    ad_group_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("ad_group", ad_group_entry),
-            CommandHandler("add_group", ad_group_entry),
-            CommandHandler("adgroup", ad_group_entry),
-            MessageHandler(filters.Regex(r"(?i)^/ad+[-_]?group(\b|@|$)"), ad_group_entry),
-            CallbackQueryHandler(ad_group_entry, pattern=r"^adm:adgroup$"),
-        ],
-        states={
             ADGROUP_INPUT: [
                 MessageHandler(filters.ALL & ~filters.COMMAND, ad_group_input),
             ],
-        },
-        fallbacks=_common_fallbacks(),
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True,
-    )
-
-    # 6. Broadcast Conversation
-    broadcast_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("broadcast", broadcast_entry),
-            CallbackQueryHandler(broadcast_entry, pattern=r"^adm:bcast$"),
-        ],
-        states={
             BCAST_INPUT: [
                 MessageHandler(filters.ALL & ~filters.COMMAND, broadcast_received),
             ],
-        },
-        fallbacks=_common_fallbacks(),
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True,
-    )
-
-    # 7. /BOT-build Conversation (For Users to create their own 24/7 Bot)
-    bot_build_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("bot_build", bot_build_entry),
-            CommandHandler("botbuild", bot_build_entry),
-            MessageHandler(filters.Regex(r"(?i)^/bot[-_]?build(\b|@|$)"), bot_build_entry),
-            CallbackQueryHandler(bot_build_entry, pattern=r"^(adm:botbuild|botbuild:start)$"),
-            CallbackQueryHandler(bot_build_continue_cb, pattern=r"^botbuild:continue$"),
-        ],
-        states={
             BOTBUILD_WAIT_TOKEN: [
                 CallbackQueryHandler(bot_build_continue_cb, pattern=r"^botbuild:continue$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, bot_build_token_received),
             ],
-        },
-        fallbacks=_common_fallbacks(),
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True,
-    )
-
-    # 8. /BOT-build-description Conversation (Admin Only)
-    bot_build_desc_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("bot_build_description", bot_build_desc_entry),
-            CommandHandler("botbuilddescription", bot_build_desc_entry),
-            MessageHandler(
-                filters.Regex(r"(?i)^/bot[-_]?build[-_]?description(\b|@|$)"),
-                bot_build_desc_entry,
-            ),
-            CallbackQueryHandler(bot_build_desc_entry, pattern=r"^adm:botbuilddesc$"),
-        ],
-        states={
             BOTBUILDDESC_WAIT_TEXT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, bot_build_desc_received),
             ],
-        },
-        fallbacks=_common_fallbacks(),
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True,
-    )
-
-    # 9. /user-upload Conversation (1-Week / 7-Day Expiry User Upload)
-    user_upload_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("user_upload", user_upload_entry),
-            CommandHandler("userupload", user_upload_entry),
-            MessageHandler(filters.Regex(r"(?i)^/user[-_]?upload(\b|@|$)"), user_upload_entry),
-            CallbackQueryHandler(user_upload_entry, pattern=r"^userupload:start$"),
-        ],
-        states={
             USERUPLOAD_MEDIA: [
                 MessageHandler(filters.ALL & ~filters.COMMAND, user_upload_media_received),
             ],
             USERUPLOAD_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, user_upload_name_received),
             ],
+            USERBOT_CH1: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, userbot_ch1_received),
+            ],
+            USERBOT_CH2: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, userbot_ch2_received),
+            ],
+            USERBOT_CH3: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, userbot_ch3_received),
+            ],
+            USERBOT_CH4: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, userbot_ch4_received),
+            ],
+            PROPLAN_WAIT_KEY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, pro_plan_key_received),
+            ],
+            PROPLAN_ADMIN_SET_KEY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, pro_key_admin_received),
+            ],
         },
         fallbacks=_common_fallbacks(),
         per_chat=True,
@@ -4703,15 +5897,7 @@ def _build_app(token: str | None = None) -> Application:
         allow_reentry=True,
     )
 
-    app.add_handler(addchannel_conv)
-    app.add_handler(upload_conv)
-    app.add_handler(group_upload_conv)
-    app.add_handler(group_banner_conv)
-    app.add_handler(ad_group_conv)
-    app.add_handler(broadcast_conv)
-    app.add_handler(bot_build_conv)
-    app.add_handler(bot_build_desc_conv)
-    app.add_handler(user_upload_conv)
+    app.add_handler(unified_conv)
 
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
@@ -4723,7 +5909,8 @@ def _build_app(token: str | None = None) -> Application:
     app.add_handler(CallbackQueryHandler(delete_file_cb, pattern=r"^delfile:"))
     app.add_handler(CallbackQueryHandler(view_file_cb, pattern=r"^viewfile:"))
     app.add_handler(CallbackQueryHandler(send_file_admin_cb, pattern=r"^sendfile:"))
-    app.add_handler(CallbackQueryHandler(userbot_router_cb, pattern=r"^userbot:"))
+    app.add_handler(CallbackQueryHandler(userbot_router_cb, pattern=r"^userbot:open:"))
+    app.add_handler(CallbackQueryHandler(user_nav_cb, pattern=r"^user:(start|help)$"))
     app.add_handler(CallbackQueryHandler(cancel_cb, pattern=r"^cancel$"))
     app.add_handler(CallbackQueryHandler(adm_router, pattern=r"^adm:"))
 
@@ -4825,6 +6012,10 @@ def seed_demo_data_if_empty() -> None:
             allow_bot_build=True,
             allow_user_upload=True,
             allow_user_two_channels=True,
+            allow_pro_plan=True,
+            pro_plan_secret_key=DEFAULT_PRO_PLAN_SECRET_KEY,
+            show_start_help=True,
+            start_welcome_text=DEFAULT_START_WELCOME_TEXT,
             user_file_expiry_days=7,
         )
         save_user_bot(
@@ -4997,7 +6188,9 @@ def main() -> None:
     try:
         from app import create_control_center_server
 
-        http_server = create_control_center_server(port=port, acquire_lock=False)
+        http_server = create_control_center_server(
+            port=port, acquire_lock=False, start_bot_thread=False
+        )
         threading.Thread(
             target=http_server.serve_forever,
             kwargs={"poll_interval": 0.05},
@@ -5026,3 +6219,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

@@ -283,23 +283,71 @@
               </div>
             </section>
 
-            <!-- TAB 1B: 🦄 /BOT-build, /BOT-build-description & User Feature Control -->
+            <!-- TAB 1B: 🦄 /BOT-build, /Pro-plan Single-Use Link & Admin /start Feature Control -->
             <section class="panel hidden" id="tabPanelBotBuild">
               <div class="panel-header">
                 <div>
-                  <h2>🦄 <code>/BOT-build</code>, <code>/BOT-build-description</code> &amp; User Control Center</h2>
+                  <h2>🦄 <code>/BOT-build</code>, 💎 <code>/Pro-plan</code> Link &amp; Admin <code>/start</code> Control</h2>
                   <p>
-                    Control which features users can access, customize the Unicorn <code>/BOT-build</code> description,
-                    manage 24/7 user-created bots (<strong>2 Admin Channels + 2 User Channels</strong> on Start),
-                    and track which users have used <code>/BOT-build</code> &amp; <code>/user-upload</code>.
+                    Control which features appear on <code>/start</code>, generate or re-arm your <strong>Single-Use Pro Activation Link</strong>
+                    (<code>?start=FILE-SHARE-YU6J-IEHU-828H</code>), and manage 24/7 user bots
+                    (<strong>Free: 2 Admin + 2 User Channels · 👑 Pro: Admin Channels Removed + 4 User Channels!</strong>).
                   </p>
                 </div>
               </div>
 
-              <!-- Step 1: /BOT-build-description & Admin Feature Permissions -->
+              <!-- 👑 One-Click Single-Use Pro Activation Link & Admin Key Generator -->
+              <div class="form-grid sub-panel" id="proActivationLinkCard">
+                <div class="sub-panel-title">
+                  <span>👑 One-Click Single-Use Pro Plan Activation Link (Admin Only — Hidden from Users)</span>
+                  <span class="verified-pill" id="proLinkSingleUseBadge">🟢 Ready (Single-Use)</span>
+                </div>
+
+                <div class="field-row">
+                  <div class="field-group">
+                    <label for="proActivationLinkReadonly">🔗 Ready-to-Share One-Click Pro Plan Link (Click karte hi VIP Banner + 4 Channels Active)</label>
+                    <input
+                      type="text"
+                      id="proActivationLinkReadonly"
+                      value="https://t.me/FILE_SHARE_00_bot?start=FILE-SHARE-YU6J-IEHU-828H"
+                      readonly
+                    />
+                    <small class="field-hint">
+                      🛒 Users can also buy keys from <strong><a href="https://t.me/Krishna_Zx_Store_bot" target="_blank" rel="noopener" style="color:#38bdf8">@Krishna_Zx_Store_bot</a></strong>
+                    </small>
+                  </div>
+                  <div class="field-group">
+                    <label for="proPlanSecretKeyInput">🔑 Master Secret Key (Default: <code>FILE-SHARE-YU6J-IEHU-828H</code>)</label>
+                    <input
+                      type="text"
+                      id="proPlanSecretKeyInput"
+                      value="FILE-SHARE-YU6J-IEHU-828H"
+                      placeholder="FILE-SHARE-YU6J-IEHU-828H"
+                    />
+                  </div>
+                </div>
+
+                <div class="form-actions" style="flex-wrap: wrap; gap: 0.5rem">
+                  <button type="button" class="btn-colorful btn-color-emerald" id="copyProActivationLinkBtn">
+                    🟢 📋 Copy Pro Activation Link
+                  </button>
+                  <button type="button" class="btn-colorful btn-color-purple" id="generateProKeyBtn">
+                    🎲 🔑 Generate New Key &amp; Link
+                  </button>
+                  <button type="button" class="btn-colorful btn-color-amber" id="resetProLinkBtn">
+                    🔄 Re-Arm Single-Use Link
+                  </button>
+                  <button type="button" class="btn-colorful btn-color-blue" id="simProLinkClickBtn">
+                    🦄 ⚡ Test Link Click in Simulator
+                  </button>
+                  <span class="form-feedback" id="proLinkActionFeedback" role="status"></span>
+                </div>
+              </div>
+
+              <!-- Step 1: /BOT-build-description & Admin /start Feature Visibility Permissions -->
               <form id="botBuilderConfigForm" class="form-grid sub-panel" novalidate>
                 <div class="sub-panel-title">
-                  <span>✨ <code>/BOT-build-description</code> &amp; User Feature Permissions (Admin Control)</span>
+                  <span>🎛️ Admin <code>/start</code> Feature Visibility &amp; <code>/BOT-build-description</code></span>
                   <span class="verified-pill">🦄 Unicorn Premium Active</span>
                 </div>
 
@@ -316,30 +364,38 @@
                 <div class="feature-toggles-grid">
                   <label class="toggle-card" for="allowBotBuildToggle">
                     <input type="checkbox" id="allowBotBuildToggle" checked />
-                    <span>🦄 Allow Users to Use <code>/BOT-build</code> (24/7 Bot Builder)</span>
+                    <span>🦄 Show <code>/BOT-build</code> on <code>/start</code> (24/7 Bot Builder)</span>
                   </label>
                   <label class="toggle-card" for="allowUserUploadToggle">
                     <input type="checkbox" id="allowUserUploadToggle" checked />
-                    <span>📤 Allow Users to Use <code>/user-upload</code> (7-Day Auto-Delete)</span>
+                    <span>📤 Show <code>/user-upload</code> on <code>/start</code> (Free: 7d · Pro: Lifetime)</span>
+                  </label>
+                  <label class="toggle-card" for="allowProPlanToggle">
+                    <input type="checkbox" id="allowProPlanToggle" checked />
+                    <span>💎 Show <code>/Pro-plan</code> &amp; <code>@Krishna_Zx_Store_bot</code> on <code>/start</code></span>
                   </label>
                   <label class="toggle-card" for="allowUserTwoChannelsToggle">
                     <input type="checkbox" id="allowUserTwoChannelsToggle" checked />
-                    <span>📢 Allow Users to Add 2 Force-Join Channels (+ 2 Admin Channels)</span>
+                    <span>📢 Allow Users to Add Channels (Free: 2+2 · Pro: 4 Own Channels)</span>
+                  </label>
+                  <label class="toggle-card" for="showStartHelpToggle">
+                    <input type="checkbox" id="showStartHelpToggle" checked />
+                    <span>ℹ️ Show Help &amp; Guide Button on <code>/start</code></span>
                   </label>
                 </div>
 
                 <div class="form-actions">
                   <button type="submit" class="btn-colorful btn-color-purple" id="saveBotBuilderConfigBtn">
-                    🟣 💾 Save /BOT-build Description &amp; User Permissions
+                    🟣 💾 Save /start Features, Pro Key &amp; Description
                   </button>
                   <span class="form-feedback" id="botBuilderConfigFeedback" role="status"></span>
                 </div>
               </form>
 
-              <!-- Step 2: Create / Verify User Bot via @BotFather Token & 2 User Channels -->
+              <!-- Step 2: Create / Verify User Bot via @BotFather Token & Up to 4 User Channels -->
               <form id="createUserBotForm" class="form-grid sub-panel" novalidate>
                 <div class="sub-panel-title">
-                  <span>🦄 👇 Verify <code>@BotFather</code> Token &amp; Configure User Bot (2+2 Channels Rule)</span>
+                  <span>🦄 👇 Verify <code>@BotFather</code> Token &amp; Configure Channels (Free: 2+2 · 👑 Pro: 4 Own Channels, Admin Removed!)</span>
                 </div>
                 <div class="field-row">
                   <div class="field-group">
@@ -358,7 +414,7 @@
                 </div>
                 <div class="field-row">
                   <div class="field-group">
-                    <label for="userBotCh1Title">User Channel 1 Title (Max 2 Channels)</label>
+                    <label for="userBotCh1Title">User Channel 1 Title</label>
                     <input type="text" id="userBotCh1Title" placeholder="e.g. Rahul Main Channel" />
                   </div>
                   <div class="field-group">
@@ -376,6 +432,26 @@
                     <input type="url" id="userBotCh2Link" placeholder="https://t.me/RahulBackupChannel" />
                   </div>
                 </div>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label for="userBotCh3Title">👑 Pro Channel 3 Title (Unlocked on Pro Plan — Admin Ch #1 Removed)</label>
+                    <input type="text" id="userBotCh3Title" placeholder="e.g. Rahul VIP Channel #3" />
+                  </div>
+                  <div class="field-group">
+                    <label for="userBotCh3Link">👑 Pro Channel 3 Link (https://t.me/...)</label>
+                    <input type="url" id="userBotCh3Link" placeholder="https://t.me/RahulVIPChannel3" />
+                  </div>
+                </div>
+                <div class="field-row">
+                  <div class="field-group">
+                    <label for="userBotCh4Title">👑 Pro Channel 4 Title (Unlocked on Pro Plan — Admin Ch #2 Removed)</label>
+                    <input type="text" id="userBotCh4Title" placeholder="e.g. Rahul VIP Channel #4" />
+                  </div>
+                  <div class="field-group">
+                    <label for="userBotCh4Link">👑 Pro Channel 4 Link (https://t.me/...)</label>
+                    <input type="url" id="userBotCh4Link" placeholder="https://t.me/RahulVIPChannel4" />
+                  </div>
+                </div>
                 <div class="form-actions">
                   <button type="submit" class="btn-colorful btn-color-emerald" id="createUserBotBtn">
                     🟢 🦄 Verify Token &amp; Launch 24/7 User Bot
@@ -385,15 +461,15 @@
               </form>
 
               <div class="sub-panel-title" style="margin: 0.5rem 0">
-                <span>🤖 Active 24/7 User Cloned Bots (2 Admin Channels + 2 User Channels on Start)</span>
+                <span>🤖 Active 24/7 User Cloned Bots (Free: 2 Admin + 2 User · 👑 Pro: 0 Admin + 4 User Channels)</span>
               </div>
               <div class="table-wrap" style="margin-bottom: 1.1rem">
                 <table class="data-table" aria-label="User Cloned Bots">
                   <thead>
                     <tr>
                       <th>Bot Name (Home Screen)</th>
-                      <th>Owner &amp; Token</th>
-                      <th>2+2 Force-Join Channels</th>
+                      <th>Owner &amp; Plan</th>
+                      <th>Force-Join Channels</th>
                       <th>Status</th>
                       <th>Actions</th>
                     </tr>
@@ -403,7 +479,7 @@
               </div>
 
               <div class="sub-panel-title" style="margin: 0.5rem 0">
-                <span>👥 User Feature Usage Tracking (Kisne Kya Use Kiya Hai Aur Kisne Nahi)</span>
+                <span>👥 User Feature &amp; Pro Plan Tracking (Toggle Pro Status Anytime)</span>
               </div>
               <div class="table-wrap">
                 <table class="data-table" aria-label="User Feature Usage Tracking">
@@ -411,8 +487,9 @@
                     <tr>
                       <th>User ID</th>
                       <th>Name &amp; Username</th>
-                      <th>Used <code>/BOT-build</code>?</th>
-                      <th>Used <code>/user-upload</code> (7d)?</th>
+                      <th>Plan Status (Pro = 4 Ch + Lifetime)</th>
+                      <th>Used Features</th>
+                      <th>Admin Action</th>
                     </tr>
                   </thead>
                   <tbody id="usersActivityTableBody"></tbody>
@@ -750,7 +827,13 @@
                   🦄 /BOT-build
                 </button>
                 <button type="button" class="cmd-btn btn-color-amber" id="simBtnUserUpload">
-                  📤 /user-upload (7d)
+                  📤 /user-upload
+                </button>
+                <button type="button" class="cmd-btn btn-color-emerald" id="simBtnProPlan">
+                  💎 /Pro-plan
+                </button>
+                <button type="button" class="cmd-btn btn-color-purple" id="simBtnProLinkActivate">
+                  🦄 🔗 Pro Link Click
                 </button>
                 <button type="button" class="cmd-btn btn-color-purple" id="simBtnGroupUpload">
                   🟣 /group-upload

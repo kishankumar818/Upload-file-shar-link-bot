@@ -71,12 +71,22 @@
     bulkFileActionsSelect: document.getElementById("bulkFileActionsSelect"),
     applyBulkFileActionBtn: document.getElementById("applyBulkFileActionBtn"),
 
-    // /BOT-build & User Control
+    // /BOT-build, /Pro-plan Single-Use Link & User Control
+    proActivationLinkReadonly: document.getElementById("proActivationLinkReadonly"),
+    proPlanSecretKeyInput: document.getElementById("proPlanSecretKeyInput"),
+    proLinkSingleUseBadge: document.getElementById("proLinkSingleUseBadge"),
+    copyProActivationLinkBtn: document.getElementById("copyProActivationLinkBtn"),
+    generateProKeyBtn: document.getElementById("generateProKeyBtn"),
+    resetProLinkBtn: document.getElementById("resetProLinkBtn"),
+    simProLinkClickBtn: document.getElementById("simProLinkClickBtn"),
+    proLinkActionFeedback: document.getElementById("proLinkActionFeedback"),
     botBuilderConfigForm: document.getElementById("botBuilderConfigForm"),
     botBuildDescInput: document.getElementById("botBuildDescInput"),
     allowBotBuildToggle: document.getElementById("allowBotBuildToggle"),
     allowUserUploadToggle: document.getElementById("allowUserUploadToggle"),
+    allowProPlanToggle: document.getElementById("allowProPlanToggle"),
     allowUserTwoChannelsToggle: document.getElementById("allowUserTwoChannelsToggle"),
+    showStartHelpToggle: document.getElementById("showStartHelpToggle"),
     botBuilderConfigFeedback: document.getElementById("botBuilderConfigFeedback"),
     createUserBotForm: document.getElementById("createUserBotForm"),
     userBotOwnerName: document.getElementById("userBotOwnerName"),
@@ -85,6 +95,10 @@
     userBotCh1Link: document.getElementById("userBotCh1Link"),
     userBotCh2Title: document.getElementById("userBotCh2Title"),
     userBotCh2Link: document.getElementById("userBotCh2Link"),
+    userBotCh3Title: document.getElementById("userBotCh3Title"),
+    userBotCh3Link: document.getElementById("userBotCh3Link"),
+    userBotCh4Title: document.getElementById("userBotCh4Title"),
+    userBotCh4Link: document.getElementById("userBotCh4Link"),
     userBotFeedback: document.getElementById("userBotFeedback"),
     userBotsTableBody: document.getElementById("userBotsTableBody"),
     usersActivityTableBody: document.getElementById("usersActivityTableBody"),
@@ -136,6 +150,8 @@
     simBtnDeepLink: document.getElementById("simBtnDeepLink"),
     simBtnBotBuild: document.getElementById("simBtnBotBuild"),
     simBtnUserUpload: document.getElementById("simBtnUserUpload"),
+    simBtnProPlan: document.getElementById("simBtnProPlan"),
+    simBtnProLinkActivate: document.getElementById("simBtnProLinkActivate"),
     simBtnGroupUpload: document.getElementById("simBtnGroupUpload"),
     simBtnGroupBanner: document.getElementById("simBtnGroupBanner"),
     simBtnAdGroup: document.getElementById("simBtnAdGroup"),
@@ -331,14 +347,36 @@
     if (els.botBuildDescInput && !els.botBuildDescInput.dataset.dirty) {
       els.botBuildDescInput.value = bb.description || "";
     }
+    if (els.proActivationLinkReadonly) {
+      els.proActivationLinkReadonly.value =
+        bb.pro_activation_link ||
+        "https://t.me/FILE_SHARE_00_bot?start=FILE-SHARE-YU6J-IEHU-828H";
+    }
+    if (els.proPlanSecretKeyInput && !els.proPlanSecretKeyInput.dataset.dirty) {
+      els.proPlanSecretKeyInput.value =
+        bb.pro_plan_secret_key || "FILE-SHARE-YU6J-IEHU-828H";
+    }
+    if (els.proLinkSingleUseBadge) {
+      const usedBy = Number(bb.pro_key_used_by || 0);
+      els.proLinkSingleUseBadge.textContent =
+        usedBy === 0
+          ? "🟢 Ready (Single-Use Available)"
+          : `🔴 Used by User #${usedBy} (Click Re-Arm or Generate New)`;
+    }
     if (els.allowBotBuildToggle) {
       els.allowBotBuildToggle.checked = bb.allow_bot_build !== false;
     }
     if (els.allowUserUploadToggle) {
       els.allowUserUploadToggle.checked = bb.allow_user_upload !== false;
     }
+    if (els.allowProPlanToggle) {
+      els.allowProPlanToggle.checked = bb.allow_pro_plan !== false;
+    }
     if (els.allowUserTwoChannelsToggle) {
       els.allowUserTwoChannelsToggle.checked = bb.allow_user_two_channels !== false;
+    }
+    if (els.showStartHelpToggle) {
+      els.showStartHelpToggle.checked = bb.show_start_help !== false;
     }
 
     renderChannelsTable();
@@ -563,22 +601,27 @@
           '<tr><td colspan="5">No user bots built via /BOT-build yet. Verify a token above!</td></tr>';
       } else {
         els.userBotsTableBody.innerHTML = uBots
-          .map(
-            (ub) => `
+          .map((ub) => {
+            const isProOwner = Boolean(ub.owner_is_pro);
+            const chBadge = isProOwner
+              ? `<span class="perm-badge" style="background:rgba(245,158,11,0.22);color:#fde68a;border-color:rgba(245,158,11,0.5)">👑 Pro: Admin Removed · ${ub.user_channels_count || 0}/4 Own Channels</span>`
+              : `<span class="perm-badge">🛡️ 2 Admin</span> + <span class="perm-badge" style="background:rgba(168,85,247,0.2);color:#e9d5ff;border-color:rgba(168,85,247,0.45)">📢 ${ub.user_channels_count || 0}/2 User Channels</span>`;
+            const chDetails = isProOwner
+              ? `1: ${escapeHtml(ub.channel_1_title || "Not Set")} · 2: ${escapeHtml(ub.channel_2_title || "Not Set")} · 3: ${escapeHtml(ub.channel_3_title || "Not Set")} · 4: ${escapeHtml(ub.channel_4_title || "Not Set")}`
+              : `1: ${escapeHtml(ub.channel_1_title || "Not Set")} · 2: ${escapeHtml(ub.channel_2_title || "Not Set")}`;
+            return `
             <tr>
               <td>
                 <strong>${escapeHtml(ub.bot_name)}</strong>
                 <div class="field-hint">@${escapeHtml(ub.bot_username)}</div>
               </td>
               <td>
-                <strong>👤 ${escapeHtml(ub.owner_name)}</strong>
+                <strong>👤 ${escapeHtml(ub.owner_name)}</strong> ${isProOwner ? '<span class="perm-badge">👑 PRO</span>' : '<span class="expiry-badge">Free</span>'}
                 <div class="field-hint">Token: <code>${escapeHtml(ub.bot_token_masked || "")}</code></div>
               </td>
               <td>
-                <div><span class="perm-badge">🛡️ 2 Admin Channels</span> + <span class="perm-badge" style="background:rgba(168,85,247,0.2);color:#e9d5ff;border-color:rgba(168,85,247,0.45)">📢 ${ub.user_channels_count || 0}/2 User Channels</span></div>
-                <div class="field-hint">
-                  1: ${escapeHtml(ub.channel_1_title || "Not Set")} · 2: ${escapeHtml(ub.channel_2_title || "Not Set")}
-                </div>
+                <div>${chBadge}</div>
+                <div class="field-hint">${chDetails}</div>
               </td>
               <td><span class="perm-badge">🟢 24/7 Online</span></td>
               <td>
@@ -592,8 +635,8 @@
                 </div>
               </td>
             </tr>
-          `
-          )
+          `;
+          })
           .join("");
 
         els.userBotsTableBody.querySelectorAll("[data-sim-userbot]").forEach((btn) => {
@@ -618,11 +661,12 @@
       const users = appState.users || [];
       if (users.length === 0) {
         els.usersActivityTableBody.innerHTML =
-          '<tr><td colspan="4">No users recorded yet.</td></tr>';
+          '<tr><td colspan="5">No users recorded yet.</td></tr>';
       } else {
         els.usersActivityTableBody.innerHTML = users
-          .map(
-            (u) => `
+          .map((u) => {
+            const isPro = Number(u.is_pro || 0) === 1;
+            return `
             <tr>
               <td><code>${u.user_id}</code></td>
               <td>
@@ -631,22 +675,45 @@
               </td>
               <td>
                 ${
-                  u.used_bot_build
-                    ? '<span class="perm-badge">✅ Used /BOT-build</span>'
-                    : '<span class="expiry-badge">❌ Not Used Yet</span>'
+                  isPro
+                    ? '<span class="perm-badge" style="background:rgba(245,158,11,0.22);color:#fde68a;border-color:rgba(245,158,11,0.5)">👑 YOUR PRO PLAN ACTIVE (4 Ch + Lifetime)</span>'
+                    : '<span class="expiry-badge">⏳ Free Plan (2+2 Ch · 7d Upload)</span>'
                 }
               </td>
               <td>
-                ${
-                  u.used_user_upload
-                    ? '<span class="perm-badge">✅ Used /user-upload (7d)</span>'
-                    : '<span class="expiry-badge">❌ Not Used Yet</span>'
-                }
+                ${u.used_bot_build ? '<span class="perm-badge">🦄 /BOT-build</span> ' : ""}
+                ${u.used_user_upload ? '<span class="perm-badge">📤 /user-upload</span>' : ""}
+                ${!u.used_bot_build && !u.used_user_upload ? '<span class="field-hint">—</span>' : ""}
+              </td>
+              <td>
+                <button
+                  type="button"
+                  class="btn-colorful ${isPro ? "btn-color-rose" : "btn-color-amber"} btn-sm"
+                  data-toggle-pro="${u.user_id}"
+                  data-pro-next="${isPro ? "0" : "1"}"
+                >
+                  ${isPro ? "🔴 Revoke Pro" : "👑 Grant Pro (4 Ch)"}
+                </button>
               </td>
             </tr>
-          `
-          )
+          `;
+          })
           .join("");
+
+        els.usersActivityTableBody.querySelectorAll("[data-toggle-pro]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const uid = Number(btn.getAttribute("data-toggle-pro"));
+            const nextPro = btn.getAttribute("data-pro-next") === "1";
+            const res = await apiFetch("/api/users/pro", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user_id: uid, is_pro: nextPro }),
+            });
+            if (res.ok) {
+              renderAll(await res.json());
+            }
+          });
+        });
       }
     }
   }
@@ -782,7 +849,10 @@
       renderAll(payload.state);
     }
 
-    els.tgBubbleContent.innerHTML = payload.message_html || "";
+    const bannerHtml = payload.banner_url
+      ? `<div style="margin-bottom:0.65rem;border-radius:10px;overflow:hidden;border:1px solid rgba(245,158,11,0.45)"><img src="${escapeHtml(payload.banner_url)}" alt="VIP Pro Plan Active Banner" style="width:100%;max-height:170px;object-fit:cover;display:block" /></div>`
+      : "";
+    els.tgBubbleContent.innerHTML = bannerHtml + (payload.message_html || "");
 
     if (payload.delivered_file) {
       const df = payload.delivered_file;
@@ -836,8 +906,76 @@
           switchTab(act.split(":")[1]);
         } else if (act.startsWith("sim:")) {
           runSimulation(act.split(":")[1]);
+        } else if (act.startsWith("url:")) {
+          const targetUrl = act.slice(4);
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(targetUrl).catch(() => {});
+          }
         }
       });
+    });
+  }
+
+  // One-Click Pro Activation Link Controls
+  if (els.copyProActivationLinkBtn) {
+    els.copyProActivationLinkBtn.addEventListener("click", () => {
+      const link = els.proActivationLinkReadonly
+        ? els.proActivationLinkReadonly.value
+        : "";
+      if (navigator.clipboard && link) {
+        navigator.clipboard.writeText(link).catch(() => {});
+      }
+      setFeedback(
+        els.proLinkActionFeedback,
+        `📋 Copied One-Click Pro Link: ${link}`,
+        false
+      );
+    });
+  }
+
+  if (els.generateProKeyBtn) {
+    els.generateProKeyBtn.addEventListener("click", async () => {
+      const res = await apiFetch("/api/pro-plan/generate-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (els.proPlanSecretKeyInput) {
+          delete els.proPlanSecretKeyInput.dataset.dirty;
+        }
+        renderAll(data);
+        setFeedback(
+          els.proLinkActionFeedback,
+          `🎲 Generated New Key & Single-Use Link: ${data.pro_activation_link}`,
+          false
+        );
+      }
+    });
+  }
+
+  if (els.resetProLinkBtn) {
+    els.resetProLinkBtn.addEventListener("click", async () => {
+      const res = await apiFetch("/api/pro-plan/reset-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) {
+        renderAll(await res.json());
+        setFeedback(
+          els.proLinkActionFeedback,
+          "🔄 Single-Use Pro Activation Link re-armed & ready for next user click!",
+          false
+        );
+      }
+    });
+  }
+
+  if (els.simProLinkClickBtn) {
+    els.simProLinkClickBtn.addEventListener("click", () => {
+      runSimulation("pro_link_activate");
     });
   }
 
@@ -846,6 +984,9 @@
     els.botBuilderConfigForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const desc = els.botBuildDescInput.value.trim();
+      const secretKey = els.proPlanSecretKeyInput
+        ? els.proPlanSecretKeyInput.value.trim()
+        : "FILE-SHARE-YU6J-IEHU-828H";
       if (!desc) {
         setFeedback(
           els.botBuilderConfigFeedback,
@@ -861,17 +1002,25 @@
           description: desc,
           allow_bot_build: els.allowBotBuildToggle.checked,
           allow_user_upload: els.allowUserUploadToggle.checked,
+          allow_pro_plan: els.allowProPlanToggle
+            ? els.allowProPlanToggle.checked
+            : true,
           allow_user_two_channels: els.allowUserTwoChannelsToggle.checked,
+          show_start_help: els.showStartHelpToggle
+            ? els.showStartHelpToggle.checked
+            : true,
+          pro_plan_secret_key: secretKey || "FILE-SHARE-YU6J-IEHU-828H",
+          reset_single_use: true,
         }),
       });
       if (res.ok) {
         renderAll(await res.json());
         setFeedback(
           els.botBuilderConfigFeedback,
-          "✅ /BOT-build-description & User Feature Permissions saved!",
+          "✅ /start Feature Permissions, Pro Key & Description saved!",
           false
         );
-        runSimulation("bot_build");
+        runSimulation("start");
       }
     });
   }
@@ -886,6 +1035,10 @@
       const c1Link = els.userBotCh1Link.value.trim();
       const c2Title = els.userBotCh2Title.value.trim();
       const c2Link = els.userBotCh2Link.value.trim();
+      const c3Title = els.userBotCh3Title ? els.userBotCh3Title.value.trim() : "";
+      const c3Link = els.userBotCh3Link ? els.userBotCh3Link.value.trim() : "";
+      const c4Title = els.userBotCh4Title ? els.userBotCh4Title.value.trim() : "";
+      const c4Link = els.userBotCh4Link ? els.userBotCh4Link.value.trim() : "";
 
       if (!ownerName || !token) {
         setFeedback(
@@ -906,6 +1059,10 @@
           channel_1_link: c1Link,
           channel_2_title: c2Title,
           channel_2_link: c2Link,
+          channel_3_title: c3Title,
+          channel_3_link: c3Link,
+          channel_4_title: c4Title,
+          channel_4_link: c4Link,
         }),
       });
       if (!res.ok) {
@@ -923,10 +1080,14 @@
       els.userBotCh1Link.value = "";
       els.userBotCh2Title.value = "";
       els.userBotCh2Link.value = "";
+      if (els.userBotCh3Title) els.userBotCh3Title.value = "";
+      if (els.userBotCh3Link) els.userBotCh3Link.value = "";
+      if (els.userBotCh4Title) els.userBotCh4Title.value = "";
+      if (els.userBotCh4Link) els.userBotCh4Link.value = "";
       renderAll(await res.json());
       setFeedback(
         els.userBotFeedback,
-        "🦄 ✅ Token Verified! User Bot is now 24/7 Online with 2+2 Force-Join Channels!",
+        "🦄 ✅ Token Verified! User Bot is now 24/7 Online!",
         false
       );
       runSimulation("user_bot_home");
@@ -1220,6 +1381,16 @@
   if (els.simBtnUserUpload) {
     els.simBtnUserUpload.addEventListener("click", () =>
       runSimulation("user_upload")
+    );
+  }
+  if (els.simBtnProPlan) {
+    els.simBtnProPlan.addEventListener("click", () =>
+      runSimulation("pro_plan")
+    );
+  }
+  if (els.simBtnProLinkActivate) {
+    els.simBtnProLinkActivate.addEventListener("click", () =>
+      runSimulation("pro_link_activate")
     );
   }
   if (els.simBtnGroupUpload) {

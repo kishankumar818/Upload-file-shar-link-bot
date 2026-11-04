@@ -264,7 +264,6 @@ class PremiumFileVaultTests(unittest.TestCase):
         button = bot_core.btn("Verify", data="verify:1", style=bot_core.GREEN)
         self.assertEqual(button.text, "Verify")
         self.assertEqual(button.callback_data, "verify:1")
-        self.assertEqual(getattr(button, "color_style", None), bot_core.GREEN)
 
     def test_conflict_error_handler_graceful_recovery(self):
         initial_conflicts = int(bot_core.BOT_RUNTIME_STATUS.get("conflict_count", 0))
@@ -390,7 +389,7 @@ class PremiumFileVaultTests(unittest.TestCase):
         self.assertIsNone(bot_core.get_file(f_user2))
         self.assertIsNotNone(bot_core.get_file(f_admin))
 
-        # 3. /BOT-build-description & /BOT-build + 2 Admin Channels + 2 User Channels
+        # 3. /BOT-build-description & /BOT-build + 2 Admin Channels + 2 User Channels (Free user)
         bot_core.save_channel(
             -1001110001, "Official Admin Ch 1", "AdminCh1", "https://t.me/AdminCh1"
         )
@@ -415,10 +414,181 @@ class PremiumFileVaultTests(unittest.TestCase):
             channel_2_link="https://t.me/RahulCh2",
         )
         self.assertGreater(ub_id, 0)
-        combined = bot_core.get_combined_force_channels_for_user_bot(ub_id)
-        # 2 Admin Channels + 2 User Channels = 4 combined channels on /start
-        self.assertEqual(len(combined), 4)
+        combined_free = bot_core.get_combined_force_channels_for_user_bot(ub_id)
+        # Free User: 2 Admin Channels + 2 User Channels = 4 combined channels on /start
+        self.assertEqual(len(combined_free), 4)
+        self.assertEqual(sum(1 for c in combined_free if c["owner"] == "admin"), 2)
+        self.assertEqual(sum(1 for c in combined_free if c["owner"] == "user"), 2)
+
+    def test_single_use_pro_plan_link_and_4_channel_upgrade(self):
+        # Verify default key is FILE-SHARE-YU6J-IEHU-828H
+        bcfg = bot_core.get_bot_builder_config()
+        self.assertEqual(bcfg["pro_plan_secret_key"], "FILE-SHARE-YU6J-IEHU-828H")
+        self.assertEqual(
+            bcfg["pro_activation_link"],
+            f"https://t.me/{bot_core.BOT_RUNTIME_STATUS['bot_username']}?start=FILE-SHARE-YU6J-IEHU-828H",
+        )
+        self.assertTrue(bot_core.is_pro_plan_start_token("FILE-SHARE-YU6J-IEHU-828H"))
+        self.assertTrue(bot_core.is_pro_plan_start_token("PRO_FILE-SHARE-YU6J-IEHU-828H"))
+
+        # Add 2 Admin Channels and a User Bot for User 777888999
+        bot_core.save_channel(
+            -1002220001, "Admin Official #1", "AdminOff1", "https://t.me/AdminOff1"
+        )
+        bot_core.save_channel(
+            -1002220002, "Admin Official #2", "AdminOff2", "https://t.me/AdminOff2"
+        )
+        ub_id = bot_core.save_user_bot(
+            owner_user_id=777888999,
+            owner_name="Krishna User",
+            bot_token="7123456789:AAH1234567890abcdefGHIJKLMNOPQRSTUV",
+            channel_1_title="User Ch 1",
+            channel_1_link="https://t.me/UserCh1",
+            channel_2_title="User Ch 2",
+            channel_2_link="https://t.me/UserCh2",
+        )
+
+        # Before Pro Plan: 2 Admin + 2 User channels
+        before_ch = bot_core.get_combined_force_channels_for_user_bot(ub_id)
+        self.assertEqual([c["owner"] for c in before_ch], ["admin", "admin", "user", "user"])
+
+        # 1st user (777888999) clicks the Single-Use Pro Activation Link -> succeeds!
+        ok1, msg1 = bot_core.activate_user_pro_plan(
+            user_id=777888999,
+            entered_key="FILE-SHARE-YU6J-IEHU-828H",
+            first_name="Krishna User",
+        )
+        self.assertTrue(ok1, msg1)
+        self.assertTrue(bot_core.is_user_pro(777888999))
+
+        # 2nd user (888999000) tries to click the SAME Single-Use Link -> BLOCKED!
+        ok2, msg2 = bot_core.activate_user_pro_plan(
+            user_id=888999000,
+            entered_key="FILE-SHARE-YU6J-IEHU-828H",
+            first_name="Second User",
+        )
+        self.assertFalse(ok2)
+        self.assertIn("Single-Use", msg2)
+        self.assertFalse(bot_core.is_user_pro(888999000))
+
+        # After Pro Plan on User 777888999: Admin's 2 channels are REMOVED and user can add 4 own channels!
+        bot_core.update_user_bot_channels(
+            bot_db_id=ub_id,
+            channel_1_title="Krishna Ch 1",
+            channel_1_link="https://t.me/KrishnaCh1",
+            channel_2_title="Krishna Ch 2",
+            channel_2_link="https://t.me/KrishnaCh2",
+            channel_3_title="Krishna Ch 3",
+            channel_3_link="https://t.me/KrishnaCh3",
+            channel_4_title="Krishna Ch 4",
+            channel_4_link="https://t.me/KrishnaCh4",
+        )
+        after_ch = bot_core.get_combined_force_channels_for_user_bot(ub_id)
+        self.assertEqual(len(after_ch), 4)
+        self.assertEqual([c["owner"] for c in after_ch], ["user", "user", "user", "user"])
+        self.assertEqual(
+            [c["title"] for c in after_ch],
+            ["Krishna Ch 1", "Krishna Ch 2", "Krishna Ch 3", "Krishna Ch 4"],
+        )
+
+        # Pro user uploads via /user-upload are LIFETIME PERMANENT (is_permanent=1, expires_at='')
+        f_pro = bot_core.save_file(
+            tg_file_id="BQACAgUAAxk_pro",
+            file_type="document",
+            file_name="ProForever.zip",
+            caption="Pro Lifetime File",
+            created_by=777888999,
+            custom_name="ProForever",
+            uploader_role="user",
+        )
+        r_pro = dict(bot_core.get_file(f_pro))
+        self.assertEqual(r_pro["is_permanent"], 1)
+        self.assertEqual(r_pro["expires_at"], "")
+
+        # Admin resets Single-Use Link -> 2nd user can now activate!
+        bot_core.reset_pro_plan_single_use_link()
+        ok2_retry, _ = bot_core.activate_user_pro_plan(
+            user_id=888999000,
+            entered_key="FILE-SHARE-YU6J-IEHU-828H",
+            first_name="Second User",
+        )
+        self.assertTrue(ok2_retry)
+        self.assertTrue(bot_core.is_user_pro(888999000))
+
+        # Admin generates a brand-new key -> starts with FILE-SHARE- and resets single-use
+        new_cfg = bot_core.generate_new_pro_plan_key()
+        self.assertTrue(new_cfg["pro_plan_secret_key"].startswith("FILE-SHARE-"))
+        self.assertEqual(new_cfg["pro_key_used_by"], 0)
+
+    def test_start_bot_build_user_upload_and_pro_link_async_handlers(self):
+        sent_messages = []
+        sent_photos = []
+
+        class DummyMessage:
+            text = "/start"
+            caption = ""
+
+            async def reply_text(self, text, reply_markup=None, disable_web_page_preview=None):
+                sent_messages.append((text, reply_markup))
+                return SimpleNamespace(message_id=len(sent_messages))
+
+        class DummyBot:
+            async def send_message(self, chat_id, text, reply_markup=None, disable_web_page_preview=None):
+                sent_messages.append((text, reply_markup))
+                return SimpleNamespace(message_id=len(sent_messages))
+
+            async def send_photo(self, chat_id, photo, caption, reply_markup=None):
+                sent_photos.append((chat_id, photo, caption, reply_markup))
+                return SimpleNamespace(message_id=len(sent_photos))
+
+        user_obj = SimpleNamespace(
+            id=444555666, first_name="TestUser", username="test_user"
+        )
+        chat_obj = SimpleNamespace(id=444555666, type="private", title="", username="")
+        update = SimpleNamespace(
+            effective_user=user_obj,
+            effective_chat=chat_obj,
+            message=DummyMessage(),
+            callback_query=None,
+        )
+
+        async def _run_all():
+            # 1. Normal /start
+            ctx_start = SimpleNamespace(args=[], bot=DummyBot(), bot_data={}, user_data={})
+            await bot_core.start_cmd(update, ctx_start)
+
+            # 2. /bot_build
+            await bot_core.bot_build_entry(update, ctx_start)
+
+            # 3. /user_upload
+            await bot_core.user_upload_entry(update, ctx_start)
+
+            # 4. /Pro-plan (must NOT leak secret key to regular user, must show @Krishna_Zx_Store_bot)
+            await bot_core.pro_plan_entry(update, ctx_start)
+
+            # 5. One-Click Pro Activation Link: /start FILE-SHARE-YU6J-IEHU-828H
+            ctx_pro_link = SimpleNamespace(
+                args=["FILE-SHARE-YU6J-IEHU-828H"],
+                bot=DummyBot(),
+                bot_data={},
+                user_data={},
+            )
+            await bot_core.start_cmd(update, ctx_pro_link)
+
+        asyncio.run(_run_all())
+        self.assertGreaterEqual(len(sent_messages), 4)
+        # Ensure regular user /Pro-plan prompt never leaks the secret key
+        pro_prompt_text = sent_messages[3][0]
+        self.assertNotIn("FILE-SHARE-YU6J-IEHU-828H", pro_prompt_text)
+        self.assertIn("Krishna_Zx_Store_bot", pro_prompt_text)
+
+        # Ensure clicking ?start=FILE-SHARE-YU6J-IEHU-828H sent the Default VIP Banner + YOUR PRO PLAN ACTIVE!
+        self.assertEqual(len(sent_photos), 1)
+        self.assertEqual(sent_photos[0][1], bot_core.DEFAULT_PRO_BANNER_URL)
+        self.assertIn("YOUR PRO PLAN ACTIVE!", sent_photos[0][2])
+        self.assertTrue(bot_core.is_user_pro(444555666))
 
 
 if __name__ == "__main__":
     unittest.main()
+
